@@ -63,37 +63,38 @@ def train_one_epoch(
     if log_writer is not None:
         print("log_dir: {}".format(log_writer.log_dir))
 
-    for data_iter_step, (points, labels, surface, _, _) in enumerate(metric_logger.log_every(data_loader, print_freq, header)):
+    # for data_iter_step, (points, labels, structure_points, _, _) in enumerate(metric_logger.log_every(data_loader, print_freq, header)):
+    for data_iter_step, (points, labels, structure_points) in enumerate(metric_logger.log_every(data_loader, print_freq, header)):
         # we use a per iteration (instead of per epoch) lr scheduler
         if data_iter_step % accum_iter == 0:
             lr_sched.adjust_learning_rate(optimizer, data_iter_step / len(data_loader) + epoch, args)
 
         points = points.to(device, non_blocking=True)
         labels = labels.to(device, non_blocking=True)
-        surface = surface.to(device, non_blocking=True)
+        structure_points = structure_points.to(device, non_blocking=True)
         # surface_normals = surface_normals.to(device, non_blocking=True)
 
         # points: Volume Samples (물체 내부의 점들).
         # surface: Surface Samples (물체 표면의 점들).
         with torch.amp.autocast(device_type="cuda", dtype=torch.bfloat16, enabled=False):
             points = points.requires_grad_(True)
-            points_all = torch.cat([points, surface], dim=1)  # points_all: 이 두 가지 샘플을 모두 합쳐 인코더/디코더에 입력.
-            outputs = model(surface, points_all)
-            # surface: 인코더 입력 -> Latent Code 생성
+            points_all = torch.cat([points, structure_points], dim=1)  # points_all: 이 두 가지 샘플을 모두 합쳐 인코더/디코더에 입력.
+            outputs = model(structure_points, points_all)
+            # structure_points: 인코더 입력 -> Latent Code 생성
             # points_all: 디코더 입력. 값을 예측해야 할 좌표들(x,y,z) -> 출력값 생성
             # training efficient하게 할려고 points_all을 grid의 subset으로 함. surface가 중요한 부분이니까 일부러 포함
             output = outputs["o"]
 
-            grad = points_gradient(points_all, output)
+            # grad = points_gradient(points_all, output)
             # TODO: CHANGE LOSS FOR CT
             with torch.amp.autocast(device_type="cuda", dtype=torch.bfloat16, enabled=False):
                 # TODO: hard coded point numbers
-                loss_eikonal = (grad[:, :].norm(2, dim=-1) - 1).pow(2).mean()  # TODO: CT에서는 Eikonal Loss를 사용하지 않음
-                loss_vol = criterion(output[:, :1024], labels[:, :1024])  # Volume 내부의 샘플(1024개)에 대한 주된 재구성 손실입니다.
-                loss_near = criterion(output[:, 1024:2048], labels[:, 1024:2048])  # 표면 근처의 샘플(1024개)에 대한 손실입니다. 표면 경계는 학습하기 어려우므로 가중치 10을 주어 강조
-                loss_surface = (
-                    (output[:, 2048:]).abs().mean()
-                )  # surface 샘플(표면 점)의 예측값 절댓값을 최소화. 이는 SDF 모델에서 "표면에서의 거리는 0이 되어야 한다"($SDF=0)는 조건을 강제. TODO: CT에서는 사용 안함(?)
+                # loss_eikonal = (grad[:, :].norm(2, dim=-1) - 1).pow(2).mean()  # TODO: CT에서는 Eikonal Loss를 사용하지 않음
+                # loss_vol = criterion(output[:, :1024], labels[:, :1024])  # Volume 내부의 샘플(1024개)에 대한 주된 재구성 손실입니다.
+                # loss_near = criterion(output[:, 1024:2048], labels[:, 1024:2048])  # 표면 근처의 샘플(1024개)에 대한 손실입니다. 표면 경계는 학습하기 어려우므로 가중치 10을 주어 강조
+                # loss_surface = (
+                #     (output[:, 2048:]).abs().mean()
+                # )  # surface 샘플(표면 점)의 예측값 절댓값을 최소화. 이는 SDF 모델에서 "표면에서의 거리는 0이 되어야 한다"($SDF=0)는 조건을 강제. TODO: CT에서는 사용 안함(?)
 
                 # print(grad.shape, surface_normals.shape)
                 # inner = torch.einsum('b n c, b n c -> b n', grad[:, 2048:], surface_normals)
@@ -103,7 +104,8 @@ def train_one_epoch(
                 # loss_surface_normal = F.l1_loss(F.normalize(grad[:, 2048:], dim=2), surface_normals)
                 # loss_surface_normal = 1 - torch.einsum('b n c, b n c -> b n', (F.normalize(grad[:, 2048:], dim=2, eps=1e-6), surface_normals)).mean()
 
-                loss = loss_vol + 10 * loss_near + 0.001 * loss_eikonal + 1 * loss_surface  # + 0.01 * loss_surface_normal
+                loss = criterion(output, labels)
+                # loss = loss_vol + 10 * loss_near + 0.001 * loss_eikonal + 1 * loss_surface  # + 0.01 * loss_surface_normal
 
         loss_value = loss.item()
 
@@ -125,10 +127,10 @@ def train_one_epoch(
 
         metric_logger.update(loss=loss_value)
 
-        metric_logger.update(loss_vol=loss_vol.item())
-        metric_logger.update(loss_near=loss_near.item())
-        metric_logger.update(loss_eikonal=loss_eikonal.item())
-        metric_logger.update(loss_surface=loss_surface.item())
+        # metric_logger.update(loss_vol=loss_vol.item())
+        # metric_logger.update(loss_near=loss_near.item())
+        # metric_logger.update(loss_eikonal=loss_eikonal.item())
+        # metric_logger.update(loss_surface=loss_surface.item())
         # metric_logger.update(loss_surface_normal=loss_surface_normal.item())
 
         metric_logger.update(vol_iou=vol_iou.item())

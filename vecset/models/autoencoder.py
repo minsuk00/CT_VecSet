@@ -57,8 +57,12 @@ class VecSetAutoEncoder(nn.Module):
         # 디코더 (Simple Attention. MLP 없음)
         self.decoder_cross_attn = PreNorm(queries_dim, Attention(queries_dim, dim, heads=dim // dim_head, dim_head=dim_head))
 
-        # Output Head. Linear Projection #TODO: CT 할 때는 sigmoid 추가?
-        self.to_outputs = nn.Sequential(nn.LayerNorm(queries_dim), nn.Linear(queries_dim, output_dim))
+        # Output Head. Linear Projection
+        self.to_outputs = nn.Sequential(
+            nn.LayerNorm(queries_dim),
+            nn.Linear(queries_dim, output_dim),
+            nn.Sigmoid(),
+        )
 
         nn.init.zeros_(self.to_outputs[1].weight)
         nn.init.zeros_(self.to_outputs[1].bias)

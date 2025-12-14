@@ -18,6 +18,7 @@ import utils.lr_decay as lrd
 import utils.misc as misc
 from engines.engine_ae import train_one_epoch
 from models import autoencoder
+from utils.ct_dataset import CTSingleVolumeDataset
 from utils.misc import NativeScalerWithGradNormCount as NativeScaler
 from utils.objaverse import Objaverse
 
@@ -91,6 +92,12 @@ def main(args):
 
     dataset_train = Objaverse(split="train", sdf_sampling=True, sdf_size=1024, surface_sampling=True, surface_size=args.point_cloud_size)
     dataset_val = Objaverse(split="val", sdf_sampling=True, sdf_size=1024, surface_sampling=True, surface_size=args.point_cloud_size)
+
+    dataset_train = CTSingleVolumeDataset(nii_path="dummy_ct.nii.gz", pc_size=args.point_cloud_size)  # DUMMY TEST
+    # real_ct_path = "/scratch/jjparkcv_root/jjparkcv98/minsukc/LIDC/LIDC_NII_Data/LIDC-IDRI-0001.nii.gz"  # REAL CT TEST
+    # dataset_train = CTSingleVolumeDataset(nii_path=real_ct_path, pc_size=args.point_cloud_size)
+    # Use same dataset for val for overfitting test
+    dataset_val = dataset_train
 
     if True:  # args.distributed:
         num_tasks = misc.get_world_size()
