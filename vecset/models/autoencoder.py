@@ -33,7 +33,7 @@ class VecSetAutoEncoder(nn.Module):
         self.depth = depth
 
         self.num_inputs = num_inputs
-        self.num_latents = num_latents
+        self.num_latents = num_latents  # Latent VecSet의 Size. 각 vector는 dim 차원
 
         self.query_type = query_type
         if query_type == "point":
@@ -43,17 +43,21 @@ class VecSetAutoEncoder(nn.Module):
         else:
             raise NotImplementedError(f"Query type {query_type} not implemented")
 
+        # 인코더 앞단: Attention + MLP (FeedForward)가 합쳐진 구조
         self.cross_attend_blocks = nn.ModuleList([PreNorm(dim, Attention(dim, dim, heads=dim // dim_head, dim_head=dim_head)), PreNorm(dim, FeedForward(dim))])
 
+        # Fourier Feature Embedding + 합쳐진 정보를 Linear Layer에 통과시켜, 모델이 처리할 수 있는 크기(dim)로 변환하고 특징을 섞어줌
         self.point_embed = PointEmbed(dim=dim)
 
+        # 인코더 본체: 여러 층의 Self-Attention + MLP (FeedForward)
         self.layers = nn.ModuleList([])
-
         for i in range(depth):
             self.layers.append(nn.ModuleList([PreNorm(dim, Attention(dim, heads=dim // dim_head, dim_head=dim_head)), PreNorm(dim, FeedForward(dim))]))
 
+        # 디코더 (Simple Attention. MLP 없음)
         self.decoder_cross_attn = PreNorm(queries_dim, Attention(queries_dim, dim, heads=dim // dim_head, dim_head=dim_head))
 
+        # Output Head. Linear Projection #TODO: CT 할 때는 sigmoid 추가?
         self.to_outputs = nn.Sequential(nn.LayerNorm(queries_dim), nn.Linear(queries_dim, output_dim))
 
         nn.init.zeros_(self.to_outputs[1].weight)
@@ -61,6 +65,7 @@ class VecSetAutoEncoder(nn.Module):
 
         self.bottleneck = bottleneck(**bottleneck_args)
 
+    # 입력된 Point Cloud(pc)에서 핵심 정보를 추출하여 Latent Code로 변환하는 역할
     def encode(self, pc):
         B, N, _ = pc.shape
         assert N == self.num_inputs
@@ -81,6 +86,7 @@ class VecSetAutoEncoder(nn.Module):
         bottleneck = self.bottleneck.pre(x)
         return bottleneck
 
+    # 전역적인 구조와 특징이 서로 융합되고, 불필요한 노이즈가 제거된 깨끗한 최종 Latent Code를 생성
     def learn(self, x):
         x = self.bottleneck.post(x)
 
@@ -93,16 +99,19 @@ class VecSetAutoEncoder(nn.Module):
 
         return x
 
+    # Latent Code(x)와 우리가 알고 싶은 위치(queries)를 입력받아 최종 Intensity 값을 예측
     def decode(self, x, queries):
         queries_embeddings = self.point_embed(queries)
         latents = self.decoder_cross_attn(queries_embeddings, context=x)
 
         return self.to_outputs(latents)
 
+    # encode, learn, decode를 순서대로 호출하며, 메모리 효율성을 위해 디코딩 시 블록 처리를 수행
     def forward(self, pc, queries, block_size=100000):
         bottleneck = self.encode(pc)
         x = self.learn(bottleneck["x"])
 
+        # 학습 시 query는 전체 grid의 subset. Inference 시에는 전체 grid
         if queries.shape[1] > block_size:
             N = block_size
             os = []

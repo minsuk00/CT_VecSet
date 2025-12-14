@@ -170,6 +170,7 @@ class DiagonalGaussianDistribution(object):
         return self.mean
 
 
+# 입력된 포인트 클라우드 pc에서 M개의 점을 선택하여 새로운 다운샘플링된 포인트 클라우드를 반환. N: 원래 포인트 클라우드의 점 개수
 def subsample(pc, N, M):
     # pc: B x N x 3
     B, N0, D = pc.shape

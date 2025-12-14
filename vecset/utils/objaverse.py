@@ -7,6 +7,7 @@ import trimesh
 from torch.utils import data
 
 
+# 3D 모델 파일(여기서는 .npz 파일)을 불러와, 모델이 학습하기 좋은 방식으로 좌표(Point)와 정답 값(SDF) 쌍으로 샘플링하여 텐서로 변환
 class Objaverse(data.Dataset):
     def __init__(
         self,
@@ -33,16 +34,18 @@ class Objaverse(data.Dataset):
 
         with open("utils/objaverse_{}.csv".format(split), newline="") as csvfile:
             reader = csv.reader(csvfile, delimiter=",")
-
             model_filenames = [(os.path.join(self.npz_folder, row[0], row[1] + ".npz"), row[2]) for row in reader]
-
         self.models = model_filenames
 
         self.return_sdf = return_sdf
 
+    def __len__(self):
+        return len(self.models)
+
     def __getitem__(self, idx):
         npz_path = self.models[idx][0]
         try:
+            # SDF 값과 포인트 종류(Volume, Near, Surface)를 미리 계산되어 있음 .npz 파일에
             with np.load(npz_path) as data:
                 vol_points = data["vol_points"]
                 vol_sdf = data["vol_sdf"]
@@ -53,6 +56,7 @@ class Objaverse(data.Dataset):
             idx = np.random.randint(self.__len__())
             return self.__getitem__(idx)
 
+        # 원본 3D 모델의 표면 점(surface)이 너무 많을 경우, self.surface_size (기본 2048개)만큼 무작위로 점을 뽑아 *인코더의 입력(pc)*으로 사용될 텐서를 준비
         if self.surface_sampling:
             ind = np.random.default_rng().choice(surface.shape[0], self.surface_size, replace=False)
             surface = surface[ind]
@@ -62,6 +66,7 @@ class Objaverse(data.Dataset):
 
         # surface_normals = torch.from_numpy(surface_normals).float()
 
+        # 균형 샘플링 (vol_sdf < 0): SDF가 음수(내부)인 점과 SDF가 양수(외부)인 점의 개수가 비슷하도록 강제
         if self.sdf_sampling:
             ### make sure balanced sampling, maybe not necessary when doing sdf regression
             pos_vol_id = vol_sdf < 0
@@ -110,6 +115,7 @@ class Objaverse(data.Dataset):
 
             points = near_points
             sdf = near_sdf
+            # 검증/테스트 시에는 가장 중요한 영역(near_points)만 사용하여, 모델이 얼마나 디테일하고 정확하게 경계를 포착했는지 엄격하게 평가
 
         if self.transform:
             surface, points = self.transform(surface, points)
@@ -154,6 +160,3 @@ class Objaverse(data.Dataset):
             sdf = (sdf < 0).float()
 
         return points, sdf, surface, self.models[idx][1], npz_path  # , surface_normals
-
-    def __len__(self):
-        return len(self.models)

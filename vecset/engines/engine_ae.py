@@ -11,6 +11,7 @@ import utils.misc as misc
 from numpy import inner
 
 
+# 출력값(output)과 정답값(labels)을 특정 threshold 기준으로 이진화하여 IoU (Intersection over Union)와 정확도(Accuracy)를 계산
 def calc_iou(output, labels, threshold):
     target = torch.zeros_like(labels)
     target[labels >= threshold] = 1
@@ -27,6 +28,7 @@ def calc_iou(output, labels, threshold):
     return iou
 
 
+# 경사도는 SDF(Signed Distance Function)의 경우 표면 법선 벡터를 의미. 이 경사도는 Eikonal Loss를 계산하는 데 필수
 def points_gradient(inputs, outputs):
     d_points = torch.ones_like(outputs, requires_grad=False, device=outputs.device)
     points_grad = torch.autograd.grad(outputs=outputs, inputs=inputs, grad_outputs=d_points, create_graph=True, retain_graph=True, only_inputs=True)[0]
@@ -71,21 +73,27 @@ def train_one_epoch(
         surface = surface.to(device, non_blocking=True)
         # surface_normals = surface_normals.to(device, non_blocking=True)
 
+        # points: Volume Samples (물체 내부의 점들).
+        # surface: Surface Samples (물체 표면의 점들).
         with torch.amp.autocast(device_type="cuda", dtype=torch.bfloat16, enabled=False):
             points = points.requires_grad_(True)
-            points_all = torch.cat([points, surface], dim=1)
+            points_all = torch.cat([points, surface], dim=1)  # points_all: 이 두 가지 샘플을 모두 합쳐 인코더/디코더에 입력.
             outputs = model(surface, points_all)
-
+            # surface: 인코더 입력 -> Latent Code 생성
+            # points_all: 디코더 입력. 값을 예측해야 할 좌표들(x,y,z) -> 출력값 생성
+            # training efficient하게 할려고 points_all을 grid의 subset으로 함. surface가 중요한 부분이니까 일부러 포함
             output = outputs["o"]
 
             grad = points_gradient(points_all, output)
-
+            # TODO: CHANGE LOSS FOR CT
             with torch.amp.autocast(device_type="cuda", dtype=torch.bfloat16, enabled=False):
                 # TODO: hard coded point numbers
-                loss_eikonal = (grad[:, :].norm(2, dim=-1) - 1).pow(2).mean()
-                loss_vol = criterion(output[:, :1024], labels[:, :1024])
-                loss_near = criterion(output[:, 1024:2048], labels[:, 1024:2048])
-                loss_surface = (output[:, 2048:]).abs().mean()
+                loss_eikonal = (grad[:, :].norm(2, dim=-1) - 1).pow(2).mean()  # TODO: CT에서는 Eikonal Loss를 사용하지 않음
+                loss_vol = criterion(output[:, :1024], labels[:, :1024])  # Volume 내부의 샘플(1024개)에 대한 주된 재구성 손실입니다.
+                loss_near = criterion(output[:, 1024:2048], labels[:, 1024:2048])  # 표면 근처의 샘플(1024개)에 대한 손실입니다. 표면 경계는 학습하기 어려우므로 가중치 10을 주어 강조
+                loss_surface = (
+                    (output[:, 2048:]).abs().mean()
+                )  # surface 샘플(표면 점)의 예측값 절댓값을 최소화. 이는 SDF 모델에서 "표면에서의 거리는 0이 되어야 한다"($SDF=0)는 조건을 강제. TODO: CT에서는 사용 안함(?)
 
                 # print(grad.shape, surface_normals.shape)
                 # inner = torch.einsum('b n c, b n c -> b n', grad[:, 2048:], surface_normals)
@@ -99,8 +107,8 @@ def train_one_epoch(
 
         loss_value = loss.item()
 
+        # logging용 IoU 계산
         threshold = 0
-
         vol_iou = calc_iou(output[:, :1024], labels[:, :1024], threshold)
         near_iou = calc_iou(output[:, 1024:2048], labels[:, 1024:2048], threshold)
 
@@ -109,7 +117,7 @@ def train_one_epoch(
             sys.exit(1)
 
         loss /= accum_iter
-        loss_scaler(loss, optimizer, clip_grad=max_norm, parameters=model.parameters(), create_graph=False, update_grad=(data_iter_step + 1) % accum_iter == 0)
+        loss_scaler(loss, optimizer, clip_grad=max_norm, parameters=model.parameters(), create_graph=False, update_grad=(data_iter_step + 1) % accum_iter == 0)  # Backprop해줌
         if (data_iter_step + 1) % accum_iter == 0:
             optimizer.zero_grad()
 
