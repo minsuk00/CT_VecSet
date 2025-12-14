@@ -10,6 +10,7 @@ from pathlib import Path
 import numpy as np
 import torch
 import torch.backends.cudnn as cudnn
+import yaml
 from torch.utils.tensorboard import SummaryWriter
 
 torch.set_num_threads(8)
@@ -25,6 +26,9 @@ from utils.objaverse import Objaverse
 
 def get_args_parser():
     parser = argparse.ArgumentParser("VecSetAutoEncoder", add_help=False)
+
+    parser.add_argument("--config", default="config.yaml", type=str, help="Path to config file")
+
     parser.add_argument("--batch_size", default=64, type=int, help="Batch size per GPU (effective batch size is batch_size * accum_iter * # gpus")
     parser.add_argument("--epochs", default=800, type=int)
     parser.add_argument("--accum_iter", default=1, type=int, help="Accumulate gradient iterations (for increasing the effective batch size under memory constraints)")
@@ -72,7 +76,20 @@ def get_args_parser():
     return parser
 
 
+def load_config(args):
+    with open(args.config, "r") as f:
+        config = yaml.safe_load(f)
+
+    # Update args namespace with config values
+    # Command line args (like output_dir) take precedence if provided
+    for key, value in config.items():
+        if not hasattr(args, key) or getattr(args, key) is None:
+            setattr(args, key, value)
+
+
 def main(args):
+    args = load_config(args)
+
     misc.init_distributed_mode(args)
 
     print("job dir: {}".format(os.path.dirname(os.path.realpath(__file__))))
@@ -90,12 +107,10 @@ def main(args):
     torch.backends.cuda.matmul.allow_tf32 = True
     torch.backends.cudnn.allow_tf32 = True
 
-    dataset_train = Objaverse(split="train", sdf_sampling=True, sdf_size=1024, surface_sampling=True, surface_size=args.point_cloud_size)
-    dataset_val = Objaverse(split="val", sdf_sampling=True, sdf_size=1024, surface_sampling=True, surface_size=args.point_cloud_size)
+    # dataset_train = Objaverse(split="train", sdf_sampling=True, sdf_size=1024, surface_sampling=True, surface_size=args.point_cloud_size)
+    # dataset_val = Objaverse(split="val", sdf_sampling=True, sdf_size=1024, surface_sampling=True, surface_size=args.point_cloud_size)
 
-    dataset_train = CTSingleVolumeDataset(nii_path="dummy_ct.nii.gz", pc_size=args.point_cloud_size)  # DUMMY TEST
-    # real_ct_path = "/scratch/jjparkcv_root/jjparkcv98/minsukc/LIDC/LIDC_NII_Data/LIDC-IDRI-0001.nii.gz"  # REAL CT TEST
-    # dataset_train = CTSingleVolumeDataset(nii_path=real_ct_path, pc_size=args.point_cloud_size)
+    dataset_train = CTSingleVolumeDataset(nii_path=args.data_path, pc_size=args.point_cloud_size)  # DUMMY TEST
     # Use same dataset for val for overfitting test
     dataset_val = dataset_train
 
