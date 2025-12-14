@@ -3,11 +3,11 @@
 import argparse
 import datetime
 import json
-import numpy as np
 import os
 import time
 from pathlib import Path
 
+import numpy as np
 import torch
 import torch.backends.cudnn as cudnn
 from torch.utils.tensorboard import SummaryWriter
@@ -16,89 +16,66 @@ torch.set_num_threads(8)
 
 import utils.lr_decay as lrd
 import utils.misc as misc
+from engines.engine_ae import train_one_epoch
+from models import autoencoder
+from utils.misc import NativeScalerWithGradNormCount as NativeScaler
 from utils.objaverse import Objaverse
 
-from utils.misc import NativeScalerWithGradNormCount as NativeScaler
-
-from models import autoencoder
-from engines.engine_ae import train_one_epoch
 
 def get_args_parser():
-    parser = argparse.ArgumentParser('VecSetAutoEncoder', add_help=False)
-    parser.add_argument('--batch_size', default=64, type=int,
-                        help='Batch size per GPU (effective batch size is batch_size * accum_iter * # gpus')
-    parser.add_argument('--epochs', default=800, type=int)
-    parser.add_argument('--accum_iter', default=1, type=int,
-                        help='Accumulate gradient iterations (for increasing the effective batch size under memory constraints)')
+    parser = argparse.ArgumentParser("VecSetAutoEncoder", add_help=False)
+    parser.add_argument("--batch_size", default=64, type=int, help="Batch size per GPU (effective batch size is batch_size * accum_iter * # gpus")
+    parser.add_argument("--epochs", default=800, type=int)
+    parser.add_argument("--accum_iter", default=1, type=int, help="Accumulate gradient iterations (for increasing the effective batch size under memory constraints)")
 
     # Model parameters
-    parser.add_argument('--model', default='learnable_vec1024x16_dim1024_depth24', type=str, metavar='MODEL',
-                        help='Name of model to train')
+    parser.add_argument("--model", default="learnable_vec1024x16_dim1024_depth24", type=str, metavar="MODEL", help="Name of model to train")
 
-    parser.add_argument('--point_cloud_size', default=8192, type=int,
-                        help='input size')
+    parser.add_argument("--point_cloud_size", default=8192, type=int, help="input size")
 
     # Optimizer parameters
-    parser.add_argument('--clip_grad', type=float, default=None, metavar='NORM',
-                        help='Clip gradient norm (default: None, no clipping)')
-    parser.add_argument('--weight_decay', type=float, default=0.05,
-                        help='weight decay (default: 0.05)')
+    parser.add_argument("--clip_grad", type=float, default=None, metavar="NORM", help="Clip gradient norm (default: None, no clipping)")
+    parser.add_argument("--weight_decay", type=float, default=0.05, help="weight decay (default: 0.05)")
 
-    parser.add_argument('--lr', type=float, default=None, metavar='LR',
-                        help='learning rate (absolute lr)')
-    parser.add_argument('--blr', type=float, default=1e-4, metavar='LR',
-                        help='base learning rate: absolute_lr = base_lr * total_batch_size / 256')
-    parser.add_argument('--layer_decay', type=float, default=0.75,
-                        help='layer-wise lr decay from ELECTRA/BEiT')
+    parser.add_argument("--lr", type=float, default=None, metavar="LR", help="learning rate (absolute lr)")
+    parser.add_argument("--blr", type=float, default=1e-4, metavar="LR", help="base learning rate: absolute_lr = base_lr * total_batch_size / 256")
+    parser.add_argument("--layer_decay", type=float, default=0.75, help="layer-wise lr decay from ELECTRA/BEiT")
 
-    parser.add_argument('--min_lr', type=float, default=1e-6, metavar='LR',
-                        help='lower lr bound for cyclic schedulers that hit 0')
+    parser.add_argument("--min_lr", type=float, default=1e-6, metavar="LR", help="lower lr bound for cyclic schedulers that hit 0")
 
-    parser.add_argument('--warmup_epochs', type=int, default=40, metavar='N',
-                        help='epochs to warmup LR')
-
+    parser.add_argument("--warmup_epochs", type=int, default=40, metavar="N", help="epochs to warmup LR")
 
     # Dataset parameters
-    parser.add_argument('--data_path', default='/home/zhanb0b/data/', type=str,
-                        help='dataset path')
+    parser.add_argument("--data_path", default="/home/zhanb0b/data/", type=str, help="dataset path")
 
-    parser.add_argument('--output_dir', default='./output/',
-                        help='path where to save, empty for no saving')
-    parser.add_argument('--log_dir', default='./output/',
-                        help='path where to tensorboard log')
-    parser.add_argument('--device', default='cuda',
-                        help='device to use for training / testing')
-    parser.add_argument('--seed', default=0, type=int)
-    parser.add_argument('--resume', default=None,
-                        help='resume from checkpoint')
+    parser.add_argument("--output_dir", default="./output/", help="path where to save, empty for no saving")
+    parser.add_argument("--log_dir", default="./output/", help="path where to tensorboard log")
+    parser.add_argument("--device", default="cuda", help="device to use for training / testing")
+    parser.add_argument("--seed", default=0, type=int)
+    parser.add_argument("--resume", default=None, help="resume from checkpoint")
 
-    parser.add_argument('--start_epoch', default=0, type=int, metavar='N',
-                        help='start epoch')
-    parser.add_argument('--eval', action='store_true',
-                        help='Perform evaluation only')
-    parser.add_argument('--dist_eval', action='store_true', default=False,
-                        help='Enabling distributed evaluation (recommended during training for faster monitor')
-    parser.add_argument('--num_workers', default=60, type=int)
-    parser.add_argument('--pin_mem', action='store_true',
-                        help='Pin CPU memory in DataLoader for more efficient (sometimes) transfer to GPU.')
-    parser.add_argument('--no_pin_mem', action='store_false', dest='pin_mem')
+    parser.add_argument("--start_epoch", default=0, type=int, metavar="N", help="start epoch")
+    parser.add_argument("--eval", action="store_true", help="Perform evaluation only")
+    parser.add_argument("--dist_eval", action="store_true", default=False, help="Enabling distributed evaluation (recommended during training for faster monitor")
+    parser.add_argument("--num_workers", default=60, type=int)
+    parser.add_argument("--pin_mem", action="store_true", help="Pin CPU memory in DataLoader for more efficient (sometimes) transfer to GPU.")
+    parser.add_argument("--no_pin_mem", action="store_false", dest="pin_mem")
     parser.set_defaults(pin_mem=False)
 
     # distributed training parameters
-    parser.add_argument('--world_size', default=1, type=int,
-                        help='number of distributed processes')
-    parser.add_argument('--local_rank', default=-1, type=int)
-    parser.add_argument('--dist_on_itp', action='store_true')
-    parser.add_argument('--dist_url', default='env://',
-                        help='url used to set up distributed training')
+    parser.add_argument("--world_size", default=1, type=int, help="number of distributed processes")
+    parser.add_argument("--local_rank", default=-1, type=int)
+    parser.add_argument("--dist_on_itp", action="store_true")
+    parser.add_argument("--dist_url", default="env://", help="url used to set up distributed training")
 
     return parser
+
 
 def main(args):
     misc.init_distributed_mode(args)
 
-    print('job dir: {}'.format(os.path.dirname(os.path.realpath(__file__))))
-    print("{}".format(args).replace(', ', ',\n'))
+    print("job dir: {}".format(os.path.dirname(os.path.realpath(__file__))))
+    print("{}".format(args).replace(", ", ",\n"))
 
     device = torch.device(args.device)
 
@@ -112,23 +89,22 @@ def main(args):
     torch.backends.cuda.matmul.allow_tf32 = True
     torch.backends.cudnn.allow_tf32 = True
 
-    dataset_train = Objaverse(split='train', sdf_sampling=True, sdf_size=1024, surface_sampling=True, surface_size=args.point_cloud_size)
-    dataset_val = Objaverse(split='val', sdf_sampling=True, sdf_size=1024, surface_sampling=True, surface_size=args.point_cloud_size)
+    dataset_train = Objaverse(split="train", sdf_sampling=True, sdf_size=1024, surface_sampling=True, surface_size=args.point_cloud_size)
+    dataset_val = Objaverse(split="val", sdf_sampling=True, sdf_size=1024, surface_sampling=True, surface_size=args.point_cloud_size)
 
     if True:  # args.distributed:
         num_tasks = misc.get_world_size()
         global_rank = misc.get_rank()
-        sampler_train = torch.utils.data.DistributedSampler(
-            dataset_train, num_replicas=num_tasks, rank=global_rank, shuffle=True
-        )
+        sampler_train = torch.utils.data.DistributedSampler(dataset_train, num_replicas=num_tasks, rank=global_rank, shuffle=True)
         print("Sampler_train = %s" % str(sampler_train))
         if args.dist_eval:
             if len(dataset_val) % num_tasks != 0:
-                print('Warning: Enabling distributed evaluation with an eval dataset not divisible by process number. '
-                      'This will slightly alter validation results as extra duplicate entries are added to achieve '
-                      'equal num of samples per-process.')
-            sampler_val = torch.utils.data.DistributedSampler(
-                dataset_val, num_replicas=num_tasks, rank=global_rank, shuffle=True)  # shuffle=True to reduce monitor bias
+                print(
+                    "Warning: Enabling distributed evaluation with an eval dataset not divisible by process number. "
+                    "This will slightly alter validation results as extra duplicate entries are added to achieve "
+                    "equal num of samples per-process."
+                )
+            sampler_val = torch.utils.data.DistributedSampler(dataset_val, num_replicas=num_tasks, rank=global_rank, shuffle=True)  # shuffle=True to reduce monitor bias
         else:
             sampler_val = torch.utils.data.SequentialSampler(dataset_val)
     else:
@@ -142,7 +118,8 @@ def main(args):
         log_writer = None
 
     data_loader_train = torch.utils.data.DataLoader(
-        dataset_train, sampler=sampler_train,
+        dataset_train,
+        sampler=sampler_train,
         batch_size=args.batch_size,
         num_workers=args.num_workers,
         pin_memory=args.pin_mem,
@@ -159,7 +136,7 @@ def main(args):
     #     pin_memory=args.pin_mem,
     #     drop_last=False
     # )
-    
+
     model = autoencoder.__dict__[args.model](pc_size=args.point_cloud_size)
 
     model.to(device)
@@ -168,10 +145,10 @@ def main(args):
     n_parameters = sum(p.numel() for p in model.parameters() if p.requires_grad)
 
     print("Model = %s" % str(model_without_ddp))
-    print('number of params (M): %.2f' % (n_parameters / 1.e6))
+    print("number of params (M): %.2f" % (n_parameters / 1.0e6))
 
     eff_batch_size = args.batch_size * args.accum_iter * misc.get_world_size()
-    
+
     if args.lr is None:  # only base_lr is specified
         args.lr = args.blr * eff_batch_size / 256
 
@@ -208,22 +185,13 @@ def main(args):
     start_time = time.time()
     max_iou = 0.0
     for epoch in range(args.start_epoch, args.epochs):
-        
         if args.distributed:
             data_loader_train.sampler.set_epoch(epoch)
         # test_stats = evaluate(data_loader_val, model, device)
 
-        train_stats = train_one_epoch(
-            model, criterion, data_loader_train,
-            optimizer, device, epoch, loss_scaler,
-            args.clip_grad,
-            log_writer=log_writer,
-            args=args
-        )
+        train_stats = train_one_epoch(model, criterion, data_loader_train, optimizer, device, epoch, loss_scaler, args.clip_grad, log_writer=log_writer, args=args)
         if args.output_dir and (epoch % 5 == 0 or epoch + 1 == args.epochs):
-            misc.save_model(
-                args=args, model=model, model_without_ddp=model_without_ddp, optimizer=optimizer,
-                loss_scaler=loss_scaler, epoch=epoch)
+            misc.save_model(args=args, model=model, model_without_ddp=model_without_ddp, optimizer=optimizer, loss_scaler=loss_scaler, epoch=epoch)
 
         # if epoch % 5 == 0 or epoch + 1 == args.epochs:
         #     # test_stats = evaluate(data_loader_val, model, device)
@@ -241,9 +209,7 @@ def main(args):
         #                     'epoch': epoch,
         #                     'n_parameters': n_parameters}
         # else:
-        log_stats = {**{f'train_{k}': v for k, v in train_stats.items()},
-                        'epoch': epoch,
-                        'n_parameters': n_parameters}
+        log_stats = {**{f"train_{k}": v for k, v in train_stats.items()}, "epoch": epoch, "n_parameters": n_parameters}
 
         if args.output_dir and misc.is_main_process():
             if log_writer is not None:
@@ -253,9 +219,10 @@ def main(args):
 
     total_time = time.time() - start_time
     total_time_str = str(datetime.timedelta(seconds=int(total_time)))
-    print('Training time {}'.format(total_time_str))
+    print("Training time {}".format(total_time_str))
 
-if __name__ == '__main__':
+
+if __name__ == "__main__":
     args = get_args_parser()
     args = args.parse_args()
     if args.output_dir:
