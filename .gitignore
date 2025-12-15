@@ -14,3 +14,4 @@ eval.py
 extensions
 .ipynb_checkpoints/
 _archive/
+*.nii.gz

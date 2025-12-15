@@ -1,0 +1,37 @@
+# Training Hyperparameters
+batch_size: 1
+epochs: 1000
+accum_iter: 1
+
+# Optimizer Settings
+lr: null  # Will be calculated based on blr
+blr: 1.0e-4
+min_lr: 1.0e-6
+weight_decay: 0.05
+warmup_epochs: 40
+clip_grad: null
+layer_decay: 0.75
+
+# Model Architecture
+model: "learnable_vec1024x16_dim1024_depth24" # Or your custom model name
+point_cloud_size: 8192
+
+# Dataset Settings
+dataset_type: "ct_single" # To switch between Objaverse and CT
+data_path: "dummy_ct.nii.gz" # Path to your NIfTI file
+num_workers: 0 # Set to 0 for debugging/single file to avoid fork issues
+pin_mem: true
+
+# Distributed Training (Defaults for single GPU)
+world_size: 1
+dist_on_itp: false
+dist_url: "env://"
+
+# Output
+output_dir: "./output/ct_overfit_experiment"
+log_dir: "./output/ct_overfit_experiment"
+seed: 42
+resume: null
+start_epoch: 0
+eval: false
+dist_eval: false
