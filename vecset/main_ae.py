@@ -15,13 +15,13 @@ from torch.utils.tensorboard import SummaryWriter
 
 torch.set_num_threads(8)
 
-import utils.lr_decay as lrd
+# import utils.lr_decay as lrd
 import utils.misc as misc
 from engines.engine_ae import train_one_epoch
 from models import autoencoder
 from utils.ct_dataset import CTSingleVolumeDataset
 from utils.misc import NativeScalerWithGradNormCount as NativeScaler
-from utils.objaverse import Objaverse
+# from utils.objaverse import Objaverse
 
 
 def get_args_parser():
@@ -29,49 +29,49 @@ def get_args_parser():
 
     parser.add_argument("--config", default="config.yaml", type=str, help="Path to config file")
 
-    parser.add_argument("--batch_size", default=64, type=int, help="Batch size per GPU (effective batch size is batch_size * accum_iter * # gpus")
-    parser.add_argument("--epochs", default=800, type=int)
-    parser.add_argument("--accum_iter", default=1, type=int, help="Accumulate gradient iterations (for increasing the effective batch size under memory constraints)")
+    parser.add_argument("--batch_size", type=int, help="Batch size per GPU (effective batch size is batch_size * accum_iter * # gpus")
+    parser.add_argument("--epochs", type=int)
+    parser.add_argument("--accum_iter", type=int, help="Accumulate gradient iterations (for increasing the effective batch size under memory constraints)")
 
     # Model parameters
-    parser.add_argument("--model", default="learnable_vec1024x16_dim1024_depth24", type=str, metavar="MODEL", help="Name of model to train")
+    parser.add_argument("--model", type=str, metavar="MODEL", help="Name of model to train")
 
-    parser.add_argument("--point_cloud_size", default=8192, type=int, help="input size")
+    parser.add_argument("--point_cloud_size", type=int, help="input size")
 
     # Optimizer parameters
-    parser.add_argument("--clip_grad", type=float, default=None, metavar="NORM", help="Clip gradient norm (default: None, no clipping)")
-    parser.add_argument("--weight_decay", type=float, default=0.05, help="weight decay (default: 0.05)")
+    parser.add_argument("--clip_grad", type=float,  metavar="NORM", help="Clip gradient norm (default: None, no clipping)")
+    parser.add_argument("--weight_decay", type=float, help="weight decay (default: 0.05)")
 
-    parser.add_argument("--lr", type=float, default=None, metavar="LR", help="learning rate (absolute lr)")
-    parser.add_argument("--blr", type=float, default=1e-4, metavar="LR", help="base learning rate: absolute_lr = base_lr * total_batch_size / 256")
-    parser.add_argument("--layer_decay", type=float, default=0.75, help="layer-wise lr decay from ELECTRA/BEiT")
+    parser.add_argument("--lr", type=float, metavar="LR", help="learning rate (absolute lr)")
+    parser.add_argument("--blr", type=float, metavar="LR", help="base learning rate: absolute_lr = base_lr * total_batch_size / 256")
+    parser.add_argument("--layer_decay", type=float, help="layer-wise lr decay from ELECTRA/BEiT")
 
-    parser.add_argument("--min_lr", type=float, default=1e-6, metavar="LR", help="lower lr bound for cyclic schedulers that hit 0")
+    parser.add_argument("--min_lr", type=float, metavar="LR", help="lower lr bound for cyclic schedulers that hit 0")
 
-    parser.add_argument("--warmup_epochs", type=int, default=40, metavar="N", help="epochs to warmup LR")
+    parser.add_argument("--warmup_epochs", type=int, metavar="N", help="epochs to warmup LR")
 
     # Dataset parameters
-    parser.add_argument("--data_path", default="/home/zhanb0b/data/", type=str, help="dataset path")
+    parser.add_argument("--data_path", type=str, help="dataset path")
 
-    parser.add_argument("--output_dir", default="./output/", help="path where to save, empty for no saving")
-    parser.add_argument("--log_dir", default="./output/", help="path where to tensorboard log")
-    parser.add_argument("--device", default="cuda", help="device to use for training / testing")
-    parser.add_argument("--seed", default=0, type=int)
-    parser.add_argument("--resume", default=None, help="resume from checkpoint")
+    parser.add_argument("--output_dir", help="path where to save, empty for no saving")
+    parser.add_argument("--log_dir", help="path where to tensorboard log")
+    parser.add_argument("--device", help="device to use for training / testing")
+    parser.add_argument("--seed", type=int)
+    parser.add_argument("--resume", help="resume from checkpoint")
 
-    parser.add_argument("--start_epoch", default=0, type=int, metavar="N", help="start epoch")
+    parser.add_argument("--start_epoch", type=int, metavar="N", help="start epoch")
     parser.add_argument("--eval", action="store_true", help="Perform evaluation only")
-    parser.add_argument("--dist_eval", action="store_true", default=False, help="Enabling distributed evaluation (recommended during training for faster monitor")
-    parser.add_argument("--num_workers", default=60, type=int)
+    parser.add_argument("--dist_eval", action="store_true", help="Enabling distributed evaluation (recommended during training for faster monitor")
+    parser.add_argument("--num_workers", type=int)
     parser.add_argument("--pin_mem", action="store_true", help="Pin CPU memory in DataLoader for more efficient (sometimes) transfer to GPU.")
     parser.add_argument("--no_pin_mem", action="store_false", dest="pin_mem")
     parser.set_defaults(pin_mem=False)
 
     # distributed training parameters
-    parser.add_argument("--world_size", default=1, type=int, help="number of distributed processes")
-    parser.add_argument("--local_rank", default=-1, type=int)
+    parser.add_argument("--world_size", type=int, help="number of distributed processes")
+    parser.add_argument("--local_rank", type=int)
     parser.add_argument("--dist_on_itp", action="store_true")
-    parser.add_argument("--dist_url", default="env://", help="url used to set up distributed training")
+    parser.add_argument("--dist_url", help="url used to set up distributed training")
 
     return parser
 
@@ -86,10 +86,9 @@ def load_config(args):
         if not hasattr(args, key) or getattr(args, key) is None:
             setattr(args, key, value)
 
+    return args
 
 def main(args):
-    args = load_config(args)
-
     misc.init_distributed_mode(args)
 
     print("job dir: {}".format(os.path.dirname(os.path.realpath(__file__))))
@@ -146,7 +145,7 @@ def main(args):
         num_workers=args.num_workers,
         pin_memory=args.pin_mem,
         drop_last=True,
-        prefetch_factor=2,
+        # prefetch_factor=2,
     )
 
     # data_loader_val = torch.utils.data.DataLoader(
@@ -247,6 +246,7 @@ def main(args):
 if __name__ == "__main__":
     args = get_args_parser()
     args = args.parse_args()
+    args = load_config(args)
     if args.output_dir:
         Path(args.output_dir).mkdir(parents=True, exist_ok=True)
     main(args)

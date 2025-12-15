@@ -213,3 +213,14 @@ def point_vec1024_dim1024_depth24(pc_size=8192):
         bottleneck=Bottleneck,
         bottleneck_args={},
     )
+
+def point_vec512x32_dim512_depth24(pc_size=2048):
+    return create_autoencoder(
+        depth=24,
+        dim=512, # C=512, Latent Vector의 차원
+        M=512, # M=512 Latent Set의 개수
+        N=pc_size, # N=2048
+        query_type="point",
+        bottleneck=Bottleneck,
+        bottleneck_args={},
+    )

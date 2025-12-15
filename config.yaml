@@ -13,11 +13,11 @@ clip_grad: null
 layer_decay: 0.75
 
 # Model Architecture
-model: "learnable_vec1024x16_dim1024_depth24" # Or your custom model name
+model: "point_vec512x32_dim512_depth24"
 point_cloud_size: 8192
 
 # Dataset Settings
-dataset_type: "ct_single" # To switch between Objaverse and CT
+dataset_type: "ct_single" 
 data_path: "dummy_ct.nii.gz" # Path to your NIfTI file
 num_workers: 0 # Set to 0 for debugging/single file to avoid fork issues
 pin_mem: true
@@ -35,3 +35,4 @@ resume: null
 start_epoch: 0
 eval: false
 dist_eval: false
+device: "cuda"
