@@ -9,7 +9,8 @@ import torch.nn.functional as F
 import utils.lr_sched as lr_sched
 import utils.misc as misc
 from numpy import inner
-
+from tqdm import tqdm
+import wandb
 
 # 출력값(output)과 정답값(labels)을 특정 threshold 기준으로 이진화하여 IoU (Intersection over Union)와 정확도(Accuracy)를 계산
 def calc_iou(output, labels, threshold):
@@ -34,6 +35,36 @@ def points_gradient(inputs, outputs):
     points_grad = torch.autograd.grad(outputs=outputs, inputs=inputs, grad_outputs=d_points, create_graph=True, retain_graph=True, only_inputs=True)[0]
     return points_grad
 
+# NEW: Helper function to visualize a slice
+def visualize_slice(model, pc, device, resolution=256):
+    """
+    Visualizes the middle axial slice (Z=0) of the reconstruction.
+    pc: (1, N, 3) encoder input from the current batch (or first in batch)
+    """
+    model.eval()
+    
+    # Generate 2D grid for the slice at z=0 (normalized range -1 to 1)
+    # Using 'ij' indexing so we get (y, x) which maps to (H, W)
+    x = torch.linspace(-1, 1, resolution, device=device)
+    y = torch.linspace(-1, 1, resolution, device=device)
+    grid_y, grid_x = torch.meshgrid(y, x, indexing='ij') 
+    grid_z = torch.zeros_like(grid_x) # Z=0 for middle slice
+    
+    # Flatten to (1, N_query, 3)
+    # Note: CTDataset uses (x, y, z) order for 'pc'. 
+    queries = torch.stack([grid_x, grid_y, grid_z], dim=-1).reshape(1, -1, 3)
+    
+    with torch.no_grad():
+        # Use the provided point cloud context (encoder input)
+        # Note: We take the first item in the batch: pc[:1]
+        out = model(pc[:1], queries)
+        pred = out["o"] # (1, N_query)
+        
+    # Reshape back to image (H, W)
+    img = pred.reshape(resolution, resolution).cpu().numpy()
+    
+    model.train()
+    return img
 
 def train_one_epoch(
     model: torch.nn.Module,
@@ -64,7 +95,9 @@ def train_one_epoch(
         print("log_dir: {}".format(log_writer.log_dir))
 
     # for data_iter_step, (points, labels, structure_points, _, _) in enumerate(metric_logger.log_every(data_loader, print_freq, header)):
-    for data_iter_step, (points, labels, structure_points) in enumerate(metric_logger.log_every(data_loader, print_freq, header)):
+    pbar = tqdm(data_loader, desc=header, disable=not misc.is_main_process())
+    for data_iter_step, (points, labels, structure_points) in enumerate(pbar):
+    # for data_iter_step, (points, labels, structure_points) in enumerate(metric_logger.log_every(data_loader, print_freq, header)):
         # we use a per iteration (instead of per epoch) lr scheduler
         if data_iter_step % accum_iter == 0:
             lr_sched.adjust_learning_rate(optimizer, data_iter_step / len(data_loader) + epoch, args)
@@ -76,7 +109,7 @@ def train_one_epoch(
 
         # points: Volume Samples (물체 내부의 점들).
         # surface: Surface Samples (물체 표면의 점들).
-        with torch.amp.autocast(device_type="cuda", dtype=torch.bfloat16, enabled=False):
+        with torch.amp.autocast(device_type="cuda", dtype=torch.bfloat16, enabled=True):
             points = points.requires_grad_(True)
             points_all = torch.cat([points, structure_points], dim=1)  # points_all: 이 두 가지 샘플을 모두 합쳐 인코더/디코더에 입력.
             outputs = model(structure_points, points_all)
@@ -87,7 +120,7 @@ def train_one_epoch(
 
             # grad = points_gradient(points_all, output)
             # TODO: CHANGE LOSS FOR CT
-            with torch.amp.autocast(device_type="cuda", dtype=torch.bfloat16, enabled=False):
+            with torch.amp.autocast(device_type="cuda", dtype=torch.bfloat16, enabled=True):
                 # TODO: hard coded point numbers
                 # loss_eikonal = (grad[:, :].norm(2, dim=-1) - 1).pow(2).mean()  # TODO: CT에서는 Eikonal Loss를 사용하지 않음
                 # loss_vol = criterion(output[:, :1024], labels[:, :1024])  # Volume 내부의 샘플(1024개)에 대한 주된 재구성 손실입니다.
@@ -143,7 +176,18 @@ def train_one_epoch(
             max_lr = max(max_lr, group["lr"])
 
         metric_logger.update(lr=max_lr)
+        
+        pbar.set_postfix({"loss": f"{loss_value:.4f}", "lr": f"{max_lr:.6f}"})
 
+        if args and args.wandb and misc.is_main_process():
+            wandb.log({
+                "train/loss": loss_value,
+                "train/lr": max_lr,
+                "train/vol_iou": vol_iou.item(),
+                "train/near_iou": near_iou.item(),
+                "epoch": epoch
+            })
+        
         loss_value_reduce = misc.all_reduce_mean(loss_value)
         if log_writer is not None and (data_iter_step + 1) % accum_iter == 0:
             """ We use epoch_1000x as the x-axis in tensorboard.
@@ -153,6 +197,13 @@ def train_one_epoch(
             log_writer.add_scalar("loss", loss_value_reduce, epoch_1000x)
             log_writer.add_scalar("lr", max_lr, epoch_1000x)
 
+    # Visualize intermediate slice at the end of the epoch
+    if args and args.wandb and misc.is_main_process():
+        # Use structure_points from the last batch as context
+        # structure_points: (B, N, 3)
+        img = visualize_slice(model, structure_points, device)
+        wandb.log({"val/slice_z0": [wandb.Image(img, caption=f"Epoch {epoch} Slice Z=0")]})
+    
     # gather the stats from all processes
     metric_logger.synchronize_between_processes()
     print("Averaged stats:", metric_logger)

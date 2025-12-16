@@ -22,6 +22,7 @@ from models import autoencoder
 from utils.ct_dataset import CTSingleVolumeDataset
 from utils.misc import NativeScalerWithGradNormCount as NativeScaler
 # from utils.objaverse import Objaverse
+import wandb
 
 
 def get_args_parser():
@@ -73,6 +74,8 @@ def get_args_parser():
     parser.add_argument("--dist_on_itp", action="store_true")
     parser.add_argument("--dist_url", help="url used to set up distributed training")
 
+    parser.add_argument("-W", "--no_wandb", action="store_true", help="Disable Wandb")
+    
     return parser
 
 
@@ -90,12 +93,21 @@ def load_config(args):
 
 def main(args):
     misc.init_distributed_mode(args)
+    if args.no_wandb:
+        args.wandb = False
 
     print("job dir: {}".format(os.path.dirname(os.path.realpath(__file__))))
     print("{}".format(args).replace(", ", ",\n"))
 
     device = torch.device(args.device)
 
+    if args.wandb and misc.is_main_process():
+        wandb.init(
+            project="ct_vecset",
+            name="test_run",
+            config=args
+        )
+    
     # fix the seed for reproducibility
     seed = args.seed + misc.get_rank()
     torch.manual_seed(seed)
@@ -242,6 +254,8 @@ def main(args):
     total_time_str = str(datetime.timedelta(seconds=int(total_time)))
     print("Training time {}".format(total_time_str))
 
+    if args.wandb and misc.is_main_process():
+        wandb.finish()
 
 if __name__ == "__main__":
     args = get_args_parser()

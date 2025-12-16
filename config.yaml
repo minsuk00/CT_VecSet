@@ -36,3 +36,4 @@ start_epoch: 0
 eval: false
 dist_eval: false
 device: "cuda"
+wandb: true
