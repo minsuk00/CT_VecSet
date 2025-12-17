@@ -25,6 +25,8 @@ from utils.shapenet import (
     ShapeNet,
     category_ids,
 )
+import nibabel as nib
+
 
 parser = argparse.ArgumentParser()
 parser.add_argument("--model", default="point_vec1024x32_dim1024_depth24_nb", type=str, metavar="MODEL", help="사용할 아키텍처의 이름")
@@ -68,7 +70,7 @@ def main():
     # transpose: (N^3, 3) (i.e., each row is x,y,z coord)
     # None: (1, N^3, 3)
 
-    with torch.no_grad():
+    with torch.no_grad():    
         # Loads a 3D mesh file (args.input) using the trimesh library and extracts only the vertices
         surface = trimesh.load(args.input).vertices.astype(np.float32)
         shifts = (surface.max(axis=0) + surface.min(axis=0)) / 2

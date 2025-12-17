@@ -6,6 +6,7 @@ import json
 import os
 import time
 from pathlib import Path
+import sys
 
 import numpy as np
 import torch
@@ -24,6 +25,18 @@ from utils.misc import NativeScalerWithGradNormCount as NativeScaler
 # from utils.objaverse import Objaverse
 import wandb
 
+class Logger(object):
+    def __init__(self, filename):
+        self.terminal = sys.stdout
+        self.log = open(filename, "a", encoding='utf-8')
+
+    def write(self, message):
+        self.terminal.write(message)
+        self.log.write(message)
+
+    def flush(self):
+        self.terminal.flush()
+        self.log.flush()
 
 def get_args_parser():
     parser = argparse.ArgumentParser("VecSetAutoEncoder", add_help=False)
@@ -55,6 +68,8 @@ def get_args_parser():
     parser.add_argument("--data_path", type=str, help="dataset path")
 
     parser.add_argument("--output_dir", help="path where to save, empty for no saving")
+    parser.add_argument("--checkpoint_dir", help="path where to save heavy model checkpoints (e.g. scratch)")
+
     parser.add_argument("--log_dir", help="path where to tensorboard log")
     parser.add_argument("--device", help="device to use for training / testing")
     parser.add_argument("--seed", type=int)
@@ -96,8 +111,23 @@ def main(args):
     if args.no_wandb:
         args.wandb = False
 
+    if args.output_dir and misc.is_main_process():
+        os.makedirs(args.output_dir, exist_ok=True)
+        # Redirect stdout to file + console
+        sys.stdout = Logger(os.path.join(args.output_dir, "console_log.txt"))
+
+    # Handle checkpoint directory
+    if not args.checkpoint_dir and args.output_dir:
+        args.checkpoint_dir = args.output_dir # Default to output_dir if not specified
+    
+    if args.checkpoint_dir and misc.is_main_process():
+        os.makedirs(args.checkpoint_dir, exist_ok=True)
+
     print("job dir: {}".format(os.path.dirname(os.path.realpath(__file__))))
-    print("{}".format(args).replace(", ", ",\n"))
+    # print("{}".format(args).replace(", ", ",\n"))
+    print(json.dumps(vars(args), indent=4, sort_keys=True))
+    print(f"[Info] Logs will be saved to: {args.output_dir}")
+    print(f"[Info] Checkpoints will be saved to: {args.checkpoint_dir}")
 
     device = torch.device(args.device)
 
@@ -124,6 +154,20 @@ def main(args):
     dataset_train = CTSingleVolumeDataset(nii_path=args.data_path, pc_size=args.point_cloud_size)  # DUMMY TEST
     # Use same dataset for val for overfitting test
     dataset_val = dataset_train
+
+    if args.wandb and misc.is_main_process():
+        # Calculate coverage safely
+        coverage = args.point_cloud_size / max(1, dataset_train.num_structure)
+        
+        wandb.log({
+            "data/total_voxels": dataset_train.total_voxels,
+            "data/structure_voxels": dataset_train.num_structure,
+            "data/structure_ratio": dataset_train.structure_ratio,
+            "data/encoding_vox/num_structure": coverage,
+            "data/pc_size": args.point_cloud_size
+        })
+        print(f"[WandB] Logged structure stats. Coverage: {coverage*100:.2f}%")
+        
 
     if True:  # args.distributed:
         num_tasks = misc.get_world_size()

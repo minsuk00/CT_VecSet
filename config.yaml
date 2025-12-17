@@ -14,7 +14,9 @@ layer_decay: 0.75
 
 # Model Architecture
 model: "point_vec512x32_dim512_depth24"
-point_cloud_size: 8192
+# point_cloud_size: 8192
+# point_cloud_size: 65536
+point_cloud_size: 14147
 
 # Dataset Settings
 dataset_type: "ct_single" 
@@ -29,6 +31,7 @@ dist_url: "env://"
 
 # Output
 output_dir: "./output/ct_overfit_experiment"
+checkpoint_dir: "/gpfs/accounts/jjparkcv_root/jjparkcv98/minsukc/vecset/ct_overfit_experiment"
 log_dir: "./output/ct_overfit_experiment"
 seed: 42
 resume: null

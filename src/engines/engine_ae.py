@@ -11,8 +11,11 @@ import utils.misc as misc
 from numpy import inner
 from tqdm import tqdm
 import wandb
+import numpy as np
 
 # 출력값(output)과 정답값(labels)을 특정 threshold 기준으로 이진화하여 IoU (Intersection over Union)와 정확도(Accuracy)를 계산
+# It ignores how dense the tissue is. It only measures if the model correctly put "something" where "something" exists.
+# Good for checking if the model learned the geometry/shape of the organ, even if the density values are slightly wrong.
 def calc_iou(output, labels, threshold):
     target = torch.zeros_like(labels)
     target[labels >= threshold] = 1
@@ -35,36 +38,40 @@ def points_gradient(inputs, outputs):
     points_grad = torch.autograd.grad(outputs=outputs, inputs=inputs, grad_outputs=d_points, create_graph=True, retain_graph=True, only_inputs=True)[0]
     return points_grad
 
-# NEW: Helper function to visualize a slice
+# NEW: Helper function to visualize 3 slices
 def visualize_slice(model, pc, device, resolution=256):
-    """
-    Visualizes the middle axial slice (Z=0) of the reconstruction.
-    pc: (1, N, 3) encoder input from the current batch (or first in batch)
-    """
     model.eval()
-    
-    # Generate 2D grid for the slice at z=0 (normalized range -1 to 1)
-    # Using 'ij' indexing so we get (y, x) which maps to (H, W)
     x = torch.linspace(-1, 1, resolution, device=device)
     y = torch.linspace(-1, 1, resolution, device=device)
     grid_y, grid_x = torch.meshgrid(y, x, indexing='ij') 
-    grid_z = torch.zeros_like(grid_x) # Z=0 for middle slice
     
-    # Flatten to (1, N_query, 3)
-    # Note: CTDataset uses (x, y, z) order for 'pc'. 
-    queries = torch.stack([grid_x, grid_y, grid_z], dim=-1).reshape(1, -1, 3)
-    
+    # Normalized range is [-1, 1].
+    # 0.25 -> -0.5
+    # 0.50 ->  0.0
+    # 0.75 ->  0.5
+    z_levels = [-0.5, 0.0, 0.5]
+    imgs = []
+
     with torch.no_grad():
-        # Use the provided point cloud context (encoder input)
-        # Note: We take the first item in the batch: pc[:1]
-        out = model(pc[:1], queries)
-        pred = out["o"] # (1, N_query)
-        
-    # Reshape back to image (H, W)
-    img = pred.reshape(resolution, resolution).cpu().numpy()
-    
+        for z_val in z_levels:
+            # Create grid for this Z slice
+            grid_z = torch.full_like(grid_x, z_val)
+            queries = torch.stack([grid_x, grid_y, grid_z], dim=-1).reshape(1, -1, 3)
+            
+            # Predict
+            out = model(pc[:1], queries)
+            pred = out["o"]
+            
+            # Reshape to image
+            img = pred.reshape(resolution, resolution).cpu().numpy()
+            imgs.append(img)
+            
+    # Concatenate images horizontally [Slice 1 | Slice 2 | Slice 3]
+    combined_img = np.concatenate(imgs, axis=1)
+
     model.train()
-    return img
+    # [NOTE] Return z_levels as well so we can log them in the caption
+    return combined_img, z_levels
 
 def train_one_epoch(
     model: torch.nn.Module,
@@ -91,8 +98,8 @@ def train_one_epoch(
     # criterion = torch.nn.BCEWithLogitsLoss()
     # criterion = torch.nn.L1Loss()
 
-    if log_writer is not None:
-        print("log_dir: {}".format(log_writer.log_dir))
+    # if log_writer is not None:
+    #     print("log_dir: {}".format(log_writer.log_dir))
 
     # for data_iter_step, (points, labels, structure_points, _, _) in enumerate(metric_logger.log_every(data_loader, print_freq, header)):
     pbar = tqdm(data_loader, desc=header, disable=not misc.is_main_process())
@@ -102,25 +109,31 @@ def train_one_epoch(
         if data_iter_step % accum_iter == 0:
             lr_sched.adjust_learning_rate(optimizer, data_iter_step / len(data_loader) + epoch, args)
 
-        points = points.to(device, non_blocking=True)
+        points = points.to(device, non_blocking=True) # near points + random points
         labels = labels.to(device, non_blocking=True)
-        structure_points = structure_points.to(device, non_blocking=True)
+        structure_points = structure_points.to(device, non_blocking=True) # zero-level set
+        # print(points.shape) # torch.Size([1, 4096, 3])
+        # print(labels.shape) # torch.Size([1, 4096, 1])
+        # print(structure_points.shape) # torch.Size([1, 8192, 3])
         # surface_normals = surface_normals.to(device, non_blocking=True)
 
         # points: Volume Samples (물체 내부의 점들).
         # surface: Surface Samples (물체 표면의 점들).
         with torch.amp.autocast(device_type="cuda", dtype=torch.bfloat16, enabled=True):
             points = points.requires_grad_(True)
-            points_all = torch.cat([points, structure_points], dim=1)  # points_all: 이 두 가지 샘플을 모두 합쳐 인코더/디코더에 입력.
-            outputs = model(structure_points, points_all)
+            # points_all = torch.cat([points, structure_points], dim=1)  # points_all: 이 두 가지 샘플을 모두 합쳐 인코더/디코더에 입력.
+            # outputs = model(structure_points, points_all)
+            outputs = model(structure_points, points)
             # structure_points: 인코더 입력 -> Latent Code 생성
             # points_all: 디코더 입력. 값을 예측해야 할 좌표들(x,y,z) -> 출력값 생성
             # training efficient하게 할려고 points_all을 grid의 subset으로 함. surface가 중요한 부분이니까 일부러 포함
             output = outputs["o"]
+            if output.dim() == 2:
+                output = output.unsqueeze(-1)
 
             # grad = points_gradient(points_all, output)
             # TODO: CHANGE LOSS FOR CT
-            with torch.amp.autocast(device_type="cuda", dtype=torch.bfloat16, enabled=True):
+            # with torch.amp.autocast(device_type="cuda", dtype=torch.bfloat16, enabled=True):
                 # TODO: hard coded point numbers
                 # loss_eikonal = (grad[:, :].norm(2, dim=-1) - 1).pow(2).mean()  # TODO: CT에서는 Eikonal Loss를 사용하지 않음
                 # loss_vol = criterion(output[:, :1024], labels[:, :1024])  # Volume 내부의 샘플(1024개)에 대한 주된 재구성 손실입니다.
@@ -137,15 +150,30 @@ def train_one_epoch(
                 # loss_surface_normal = F.l1_loss(F.normalize(grad[:, 2048:], dim=2), surface_normals)
                 # loss_surface_normal = 1 - torch.einsum('b n c, b n c -> b n', (F.normalize(grad[:, 2048:], dim=2, eps=1e-6), surface_normals)).mean()
 
-                loss = criterion(output, labels)
+                # num_queries = points.shape[1]
+                # output_valid = output[:, :num_queries] # Shape: (B, 4096)
+                # # Unsqueeze to match labels shape (B, 4096, 1)
+                # output_valid = output_valid.unsqueeze(-1) 
+                # loss = criterion(output_valid, labels)
                 # loss = loss_vol + 10 * loss_near + 0.001 * loss_eikonal + 1 * loss_surface  # + 0.01 * loss_surface_normal
-
+            
+            num_queries = points.shape[1]
+            split_idx = num_queries // 2
+            
+            # Uniform (Empty Space Learning)
+            output_uniform = output[:, :split_idx]
+            labels_uniform = labels[:, :split_idx]
+            loss_uniform = criterion(output_uniform, labels_uniform)
+            
+            # Structure (Detail Learning)
+            output_struct = output[:, split_idx:]
+            labels_struct = labels[:, split_idx:]
+            loss_struct = criterion(output_struct, labels_struct)
+            
+            # [NEW] Weighted Sum: Emphasize Structure by 5x
+            loss = loss_uniform + 10.0 * loss_struct
+        
         loss_value = loss.item()
-
-        # logging용 IoU 계산
-        threshold = 0
-        vol_iou = calc_iou(output[:, :1024], labels[:, :1024], threshold)
-        near_iou = calc_iou(output[:, 1024:2048], labels[:, 1024:2048], threshold)
 
         if not math.isfinite(loss_value):
             print("Loss is {}, stopping training".format(loss_value))
@@ -158,16 +186,30 @@ def train_one_epoch(
 
         torch.cuda.synchronize()
 
+        # metric calculation
+        with torch.no_grad():
+            # MSE & PSNR
+            # Since data is [0, 1], PSNR = -10 * log10(MSE)
+            mse_val = F.mse_loss(output, labels).item() # best: 0.0, worst: 1.0
+            psnr_val = -10.0 * math.log10(mse_val + 1e-10) # 1e-10 for numerical stability. best: 100, worst: 0
+            
+            # IoU with threshold 0.1 (Occupancy check)
+            # Threshold 0.1: Is it structure? (>0.1) or Air? (<0.1)
+            iou_val = calc_iou(output, labels, threshold=0.1) # best: 1.0, worst: 0.0
+
+        # Update Loggers
         metric_logger.update(loss=loss_value)
+        metric_logger.update(loss_uniform=loss_uniform.item())
+        metric_logger.update(loss_struct=loss_struct.item())
+        metric_logger.update(mse=mse_val)
+        metric_logger.update(psnr=psnr_val)
+        metric_logger.update(iou=iou_val)
 
         # metric_logger.update(loss_vol=loss_vol.item())
         # metric_logger.update(loss_near=loss_near.item())
         # metric_logger.update(loss_eikonal=loss_eikonal.item())
         # metric_logger.update(loss_surface=loss_surface.item())
         # metric_logger.update(loss_surface_normal=loss_surface_normal.item())
-
-        metric_logger.update(vol_iou=vol_iou.item())
-        metric_logger.update(near_iou=near_iou.item())
 
         min_lr = 10.0
         max_lr = 0.0
@@ -177,14 +219,22 @@ def train_one_epoch(
 
         metric_logger.update(lr=max_lr)
         
-        pbar.set_postfix({"loss": f"{loss_value:.4f}", "lr": f"{max_lr:.6f}"})
+        # Display Split Loss in Progress Bar
+        pbar.set_postfix({
+            "L_uni": f"{loss_uniform.item():.4f}", 
+            "L_str": f"{loss_struct.item():.4f}", 
+            "psnr": f"{psnr_val:.2f}"
+        })
 
         if args and args.wandb and misc.is_main_process():
             wandb.log({
                 "train/loss": loss_value,
+                "train/loss_uniform": loss_uniform.item(),
+                "train/loss_structure": loss_struct.item(),
+                "train/mse": mse_val,
+                "train/psnr": psnr_val,
+                "train/iou": iou_val,
                 "train/lr": max_lr,
-                "train/vol_iou": vol_iou.item(),
-                "train/near_iou": near_iou.item(),
                 "epoch": epoch
             })
         
@@ -199,10 +249,9 @@ def train_one_epoch(
 
     # Visualize intermediate slice at the end of the epoch
     if args and args.wandb and misc.is_main_process():
-        # Use structure_points from the last batch as context
-        # structure_points: (B, N, 3)
-        img = visualize_slice(model, structure_points, device)
-        wandb.log({"val/slice_z0": [wandb.Image(img, caption=f"Epoch {epoch} Slice Z=0")]})
+        img, z_levels = visualize_slice(model, structure_points, device)
+        caption_str = f"Epoch {epoch} | Total Slices: {len(z_levels)} | Z-Indices: {z_levels}"
+        wandb.log({"val/slices": [wandb.Image(img, caption=caption_str)]})
     
     # gather the stats from all processes
     metric_logger.synchronize_between_processes()
