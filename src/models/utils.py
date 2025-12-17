@@ -82,7 +82,6 @@ class Attention(nn.Module):
         out = rearrange(out, "b h n d -> b n (h d)")
         return self.to_out(out)
 
-
 class PointEmbed(nn.Module):
     def __init__(self, hidden_dim=48, dim=128):
         super().__init__()
@@ -91,6 +90,7 @@ class PointEmbed(nn.Module):
 
         self.embedding_dim = hidden_dim
         e = torch.pow(2, torch.arange(self.embedding_dim // 6)).float() * np.pi
+        
         e = torch.stack(
             [
                 torch.cat([e, torch.zeros(self.embedding_dim // 6), torch.zeros(self.embedding_dim // 6)]),
@@ -98,20 +98,26 @@ class PointEmbed(nn.Module):
                 torch.cat([torch.zeros(self.embedding_dim // 6), torch.zeros(self.embedding_dim // 6), e]),
             ]
         )
-        self.register_buffer("basis", e)  # 3 x 16
+        self.register_buffer("basis", e)  # 3 x (embedding_dim // 2)
 
         self.mlp = nn.Linear(self.embedding_dim + 3, dim)
 
     @staticmethod
     def embed(input, basis):
-        projections = torch.einsum("bnd,de->bne", input, basis)
+        # input: B x N x C (C >= 3)
+        # Only use first 3 coords for fourier embedding
+        input_xyz = input[..., :3]
+        
+        projections = torch.einsum("b n c, c d -> b n d", input_xyz, basis)
         embeddings = torch.cat([projections.sin(), projections.cos()], dim=2)
         return embeddings
 
     def forward(self, input):
-        # input: B x N x 3
-        embed = self.mlp(torch.cat([self.embed(input, self.basis), input], dim=2))  # B x N x C
+        input_xyz = input[..., :3]
+        embed = self.mlp(torch.cat([self.embed(input, self.basis), input_xyz], dim=2))
         return embed
+
+
 
 
 # class PointEmbed(nn.Module):
@@ -187,19 +193,24 @@ def subsample(pc, N, M):
     assert N == N0
 
     ###### fps
-    flattened = pc.view(B * N, D)
-
+    coords = pc[..., :3] 
+        
+    # Flatten batch for FPS
+    flattened_coords = coords.view(B * N, 3)
     batch = torch.arange(B).to(pc.device)
     batch = torch.repeat_interleave(batch, N)
-
-    pos = flattened
-
-    ratio = 1.0 * M / N
-
-    idx = fps(pos, batch, ratio=ratio)
-
-    sampled_pc = pos[idx]
-    sampled_pc = sampled_pc.view(B, -1, 3)
+    
+    # Get indices of subsampled points
+    ratio = M / N
+    idx = fps(flattened_coords, batch, ratio=ratio)
+    
+    # Select the full feature vector (D channels) using the indices
+    # We need to reshape pc to (B*N, D) first
+    flattened_pc = pc.view(B * N, D)
+    sampled_pc = flattened_pc[idx]
+    
+    # Reshape back to (B, num_latents, D)
+    sampled_pc = sampled_pc.view(B, -1, D)
     ######
 
     return sampled_pc

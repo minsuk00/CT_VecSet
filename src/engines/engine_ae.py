@@ -39,39 +39,95 @@ def points_gradient(inputs, outputs):
     return points_grad
 
 # NEW: Helper function to visualize 3 slices
-def visualize_slice(model, pc, device, resolution=256):
+def visualize_slice(model, pc, device, resolution=256, gt_volume=None):
     model.eval()
     x = torch.linspace(-1, 1, resolution, device=device)
     y = torch.linspace(-1, 1, resolution, device=device)
     grid_y, grid_x = torch.meshgrid(y, x, indexing='ij') 
     
     # Normalized range is [-1, 1].
-    # 0.25 -> -0.5
-    # 0.50 ->  0.0
-    # 0.75 ->  0.5
-    z_levels = [-0.5, 0.0, 0.5]
-    imgs = []
+    # We pick 3 distinct levels
+    # z_levels_norm = [-0.5, 0.0, 0.5]
+    z_levels_norm = [-0.35, 0.0, 0.35]
+    
+    imgs_pred = []
+    imgs_gt = []
+    slice_indices = []
 
     with torch.no_grad():
-        for z_val in z_levels:
-            # Create grid for this Z slice
+        for z_val in z_levels_norm:
+            # 1. Calculate the actual integer index (0 to resolution-1)
+            # Map [-1, 1] -> [0, 1] -> [0, resolution-1]
+            idx = int(round((z_val + 1) / 2 * (resolution - 1)))
+            slice_indices.append(idx)
+
+            # 2. Create grid for this Z slice
             grid_z = torch.full_like(grid_x, z_val)
             queries = torch.stack([grid_x, grid_y, grid_z], dim=-1).reshape(1, -1, 3)
             
-            # Predict
+            # 3. Predict
             out = model(pc[:1], queries)
             pred = out["o"]
             
-            # Reshape to image
-            img = pred.reshape(resolution, resolution).cpu().numpy()
-            imgs.append(img)
+            # 4. Reshape to image
+            img_pred = pred.reshape(resolution, resolution).cpu().numpy()
             
-    # Concatenate images horizontally [Slice 1 | Slice 2 | Slice 3]
-    combined_img = np.concatenate(imgs, axis=1)
+            # [DEBUG] Check range to debug black images
+            # print(f"DEBUG: Slice {idx} min={img_pred.min():.4f}, max={img_pred.max():.4f}")
+            
+            # [NOTE] Clip to [0, 1] range to avoid negative values appearing black or scaling issues
+            img_pred = np.clip(img_pred, 0, 1)
+            imgs_pred.append(img_pred)
+
+            # [NOTE] Sample Ground Truth if volume is provided
+            if gt_volume is not None:
+                # gt_volume is (1, D, H, W). grid_sample needs (N, C, D_in, H_in, W_in)
+                # Queries are (1, N_pixels, 3). Reshape to (1, 1, H_out, W_out, 3)
+                # Move grid to same device as gt_volume (likely CPU) to avoid large transfer
+                tgt_device = gt_volume.device
+                grid_gt = queries.view(1, 1, resolution, resolution, 3).to(tgt_device)
+                
+                input_gt = gt_volume.unsqueeze(0) # Add batch dim: (1, 1, D, H, W)
+                
+                # Sample
+                sampled_gt = F.grid_sample(input_gt, grid_gt, align_corners=True) # (1, 1, 1, H, W)
+                img_gt = sampled_gt.squeeze().cpu().numpy()
+                img_gt = np.clip(img_gt, 0, 1) # Clip GT as well
+                imgs_gt.append(img_gt)
+            
+    # [NOTE] Helper to concatenate images horizontally with separator
+    def concat_row(img_list):
+        if not img_list: return None
+        sep_width = 10 # 10 pixels of white space
+        # Assuming images are in [0, 1] range. 1.0 is white.
+        separator = np.ones((resolution, sep_width), dtype=img_list[0].dtype)
+        
+        imgs_with_sep = []
+        for i, img in enumerate(img_list):
+            imgs_with_sep.append(img)
+            if i < len(img_list) - 1: # Don't add after the last image
+                imgs_with_sep.append(separator)
+        return np.concatenate(imgs_with_sep, axis=1)
+
+    # Build Rows
+    row_pred = concat_row(imgs_pred)
+    
+    if gt_volume is not None and imgs_gt:
+        row_gt = concat_row(imgs_gt)
+        
+        # [NOTE] Stack Vertically: GT on Top, Pred on Bottom
+        # Add vertical separator
+        sep_height = 10
+        width = row_pred.shape[1]
+        v_separator = np.ones((sep_height, width), dtype=row_pred.dtype)
+        
+        combined_img = np.concatenate([row_gt, v_separator, row_pred], axis=0)
+    else:
+        combined_img = row_pred
 
     model.train()
-    # [NOTE] Return z_levels as well so we can log them in the caption
-    return combined_img, z_levels
+    # Return image, list of indices, and total count
+    return combined_img, slice_indices, resolution
 
 def train_one_epoch(
     model: torch.nn.Module,
@@ -171,7 +227,8 @@ def train_one_epoch(
             loss_struct = criterion(output_struct, labels_struct)
             
             # [NEW] Weighted Sum: Emphasize Structure by 5x
-            loss = loss_uniform + 10.0 * loss_struct
+            # loss = loss_uniform + 10.0 * loss_struct
+            loss = loss_uniform + 2.0 * loss_struct
         
         loss_value = loss.item()
 
@@ -249,8 +306,12 @@ def train_one_epoch(
 
     # Visualize intermediate slice at the end of the epoch
     if args and args.wandb and misc.is_main_process():
-        img, z_levels = visualize_slice(model, structure_points, device)
-        caption_str = f"Epoch {epoch} | Total Slices: {len(z_levels)} | Z-Indices: {z_levels}"
+        # Retrieve GT volume from dataset if available
+        gt_volume = None
+        if hasattr(data_loader, 'dataset') and hasattr(data_loader.dataset, 'data'):
+             gt_volume = data_loader.dataset.data
+        img, slice_indices, total_slices = visualize_slice(model, structure_points, device, gt_volume=gt_volume)
+        caption_str = f"Epoch {epoch} | Top: GT, Bottom: Pred | Slices: {slice_indices} / {total_slices}"
         wandb.log({"val/slices": [wandb.Image(img, caption=caption_str)]})
     
     # gather the stats from all processes

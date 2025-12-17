@@ -94,7 +94,14 @@ class CTSingleVolumeDataset(Dataset):
         pc_y = (indices[:, 1] / (H - 1)) * 2 - 1
         pc_x = (indices[:, 2] / (W - 1)) * 2 - 1
         # VecSet expects [N, 3] input
-        pc = torch.stack([pc_x, pc_y, pc_z], dim=-1).float()  # (N, 3)
+        pc_coords = torch.stack([pc_x, pc_y, pc_z], dim=-1).float()  # (N, 3)
+
+        # Get Encoder Intensities! 
+        # We use the integer indices to lookup values
+        pc_vals = self.data[0, indices[:, 0], indices[:, 1], indices[:, 2]].unsqueeze(-1).float()
+        
+        # Combine -> (N, 4) [x, y, z, intensity]
+        pc_full = torch.cat([pc_coords, pc_vals], dim=-1)
 
         # --- 2. Decoder Query (points, labels) ---
         # "Training Data": Random points in continuous space
@@ -139,4 +146,4 @@ class CTSingleVolumeDataset(Dataset):
         labels = sampled.view(-1, 1)
 
         # Return format: (Decoder_Input, Decoder_Target, Encoder_Input)
-        return queries.float(), labels.float(), pc.float()
+        return queries.float(), labels.float(), pc_full.float()

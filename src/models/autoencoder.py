@@ -36,6 +36,9 @@ class VecSetAutoEncoder(nn.Module):
         self.num_latents = num_latents  # Latent VecSet의 Size. 각 vector는 dim 차원
 
         self.query_type = query_type
+        # PointEmbed output is 'dim'. We append intensity (1 channel), so we have dim+1.
+        self.input_merge = nn.Linear(dim + 1, dim)
+        
         if query_type == "point":
             pass
         elif query_type == "learnable":
@@ -74,13 +77,22 @@ class VecSetAutoEncoder(nn.Module):
         B, N, _ = pc.shape
         assert N == self.num_inputs
 
+        coords = pc[..., :3]      # (B, N, 3)
+        intensities = pc[..., 3:] # (B, N, 1)
+
         if self.query_type == "point":
             sampled_pc = subsample(pc, N, self.num_latents)
             x = self.point_embed(sampled_pc)
         elif self.query_type == "learnable":
             x = repeat(self.latents.weight, "n d -> b n d", b=B)
 
-        pc_embeddings = self.point_embed(pc)
+        coord_features = self.point_embed(coords) 
+        
+        # Concatenate: (B, N, dim) + (B, N, 1) -> (B, N, dim+1)
+        combined_features = torch.cat([coord_features, intensities], dim=-1)
+        
+        # Project back to transformer dimension
+        pc_embeddings = self.input_merge(combined_features)
 
         cross_attn, cross_ff = self.cross_attend_blocks
 
@@ -221,6 +233,17 @@ def point_vec512x32_dim512_depth24(pc_size=2048):
         M=512, # M=512 Latent Set의 개수
         N=pc_size, # N=2048
         query_type="point",
+        bottleneck=Bottleneck,
+        bottleneck_args={},
+    )
+
+def learnable_vec512x32_dim512_depth24(pc_size=2048):
+    return create_autoencoder(
+        depth=24,
+        dim=512, # C=512, Latent Vector의 차원
+        M=512, # M=512 Latent Set의 개수
+        N=pc_size, # N=2048
+        query_type="learnable",
         bottleneck=Bottleneck,
         bottleneck_args={},
     )
