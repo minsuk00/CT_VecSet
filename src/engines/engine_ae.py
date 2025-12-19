@@ -41,93 +41,109 @@ def points_gradient(inputs, outputs):
 # NEW: Helper function to visualize 3 slices
 def visualize_slice(model, pc, device, resolution=256, gt_volume=None):
     model.eval()
-    x = torch.linspace(-1, 1, resolution, device=device)
-    y = torch.linspace(-1, 1, resolution, device=device)
-    grid_y, grid_x = torch.meshgrid(y, x, indexing='ij') 
     
-    # Normalized range is [-1, 1].
-    # We pick 3 distinct levels
-    # z_levels_norm = [-0.5, 0.0, 0.5]
-    z_levels_norm = [-0.35, 0.0, 0.35]
-    
-    imgs_pred = []
-    imgs_gt = []
-    slice_indices = []
+    # [NOTE] Use GT resolution if available, otherwise default
+    res_d, res_h, res_w = resolution, resolution, resolution
+    if gt_volume is not None:
+        # gt_volume shape is (1, D, H, W)
+        res_d, res_h, res_w = gt_volume.shape[1:]
+        # print(f"DEBUG: Using GT resolution: D={res_d}, H={res_h}, W={res_w}")
 
+    # Base linspace for each dimension
+    # We need separate grids for D, H, W because they might be different
+    ticks_d = torch.linspace(-1, 1, res_d, device=device)
+    ticks_h = torch.linspace(-1, 1, res_h, device=device)
+    ticks_w = torch.linspace(-1, 1, res_w, device=device)
+    
+    # Normalized positions for slices (25%, 50%, 75%)
+    slice_pos_norm = [-0.25, 0.0, 0.25]
+    
+    # Store images for all directions
+    # Structure: [Axial_Row, Coronal_Row, Sagittal_Row]
+    all_direction_imgs = []
+    
     with torch.no_grad():
-        for z_val in z_levels_norm:
-            # 1. Calculate the actual integer index (0 to resolution-1)
-            # Map [-1, 1] -> [0, 1] -> [0, resolution-1]
-            idx = int(round((z_val + 1) / 2 * (resolution - 1)))
-            slice_indices.append(idx)
+        # Iterate over 3 directions: 0=X (Sagittal), 1=Y (Coronal), 2=Z (Axial)
+        for direction in [2, 1, 0]: 
+            imgs_pred_row = []
+            imgs_gt_row = []
+            
+            # Construct grids based on the *plane* we are visualizing
+            if direction == 2:   # Axial (Z-plane): Fix Z, vary X, Y. Grid is (H, W)
+                u, v = torch.meshgrid(ticks_h, ticks_w, indexing='ij') 
+                res_u, res_v = res_h, res_w
+            elif direction == 1: # Coronal (Y-plane): Fix Y, vary X, Z. Grid is (D, W)
+                u, v = torch.meshgrid(ticks_d, ticks_w, indexing='ij')
+                res_u, res_v = res_d, res_w
+            else:                # Sagittal (X-plane): Fix X, vary Y, Z. Grid is (D, H)
+                u, v = torch.meshgrid(ticks_d, ticks_h, indexing='ij')
+                res_u, res_v = res_d, res_h
 
-            # 2. Create grid for this Z slice
-            grid_z = torch.full_like(grid_x, z_val)
-            queries = torch.stack([grid_x, grid_y, grid_z], dim=-1).reshape(1, -1, 3)
-            
-            # 3. Predict
-            out = model(pc[:1], queries)
-            pred = out["o"]
-            
-            # 4. Reshape to image
-            img_pred = pred.reshape(resolution, resolution).cpu().numpy()
-            
-            # [DEBUG] Check range to debug black images
-            # print(f"DEBUG: Slice {idx} min={img_pred.min():.4f}, max={img_pred.max():.4f}")
-            
-            # [NOTE] Clip to [0, 1] range to avoid negative values appearing black or scaling issues
-            img_pred = np.clip(img_pred, 0, 1)
-            imgs_pred.append(img_pred)
-
-            # [NOTE] Sample Ground Truth if volume is provided
-            if gt_volume is not None:
-                # gt_volume is (1, D, H, W). grid_sample needs (N, C, D_in, H_in, W_in)
-                # Queries are (1, N_pixels, 3). Reshape to (1, 1, H_out, W_out, 3)
-                # Move grid to same device as gt_volume (likely CPU) to avoid large transfer
-                tgt_device = gt_volume.device
-                grid_gt = queries.view(1, 1, resolution, resolution, 3).to(tgt_device)
+            for pos in slice_pos_norm:
+                fixed = torch.full_like(u, pos)
                 
-                input_gt = gt_volume.unsqueeze(0) # Add batch dim: (1, 1, D, H, W)
-                
-                # Sample
-                sampled_gt = F.grid_sample(input_gt, grid_gt, align_corners=True) # (1, 1, 1, H, W)
-                img_gt = sampled_gt.squeeze().cpu().numpy()
-                img_gt = np.clip(img_gt, 0, 1) # Clip GT as well
-                imgs_gt.append(img_gt)
-            
-    # [NOTE] Helper to concatenate images horizontally with separator
-    def concat_row(img_list):
-        if not img_list: return None
-        sep_width = 10 # 10 pixels of white space
-        # Assuming images are in [0, 1] range. 1.0 is white.
-        separator = np.ones((resolution, sep_width), dtype=img_list[0].dtype)
-        
-        imgs_with_sep = []
-        for i, img in enumerate(img_list):
-            imgs_with_sep.append(img)
-            if i < len(img_list) - 1: # Don't add after the last image
-                imgs_with_sep.append(separator)
-        return np.concatenate(imgs_with_sep, axis=1)
+                # Construct 3D query based on direction
+                if direction == 2:   # Fix Z (Axial): (x, y, fixed) -> x=v(W), y=u(H)
+                    queries = torch.stack([v, u, fixed], dim=-1) 
+                elif direction == 1: # Fix Y (Coronal): (x, fixed, z) -> x=v(W), z=u(D)
+                    queries = torch.stack([v, fixed, u], dim=-1) 
+                else:                # Fix X (Sagittal): (fixed, y, z) -> y=v(H), z=u(D)
+                    queries = torch.stack([fixed, v, u], dim=-1)
 
-    # Build Rows
-    row_pred = concat_row(imgs_pred)
+                queries = queries.reshape(1, -1, 3) # (1, N, 3)
+                
+                # Predict
+                out = model(pc[:1], queries)
+                img_pred = out["o"].reshape(res_u, res_v).cpu().numpy()
+                img_pred = np.clip(img_pred, 0, 1)
+                imgs_pred_row.append(img_pred)
+
+                # Sample GT
+                if gt_volume is not None:
+                    tgt_device = gt_volume.device
+                    # Grid for sampling must be (1, 1, H_out, W_out, 3)
+                    grid_gt = queries.view(1, 1, res_u, res_v, 3).to(tgt_device)
+                    input_gt = gt_volume.unsqueeze(0) 
+                    sampled_gt = F.grid_sample(input_gt, grid_gt, align_corners=True) 
+                    img_gt = sampled_gt.squeeze().cpu().numpy()
+                    img_gt = np.clip(img_gt, 0, 1)
+                    imgs_gt_row.append(img_gt)
+
+            # Concatenate this row (3 slices)
+            row_pred = np.concatenate(imgs_pred_row, axis=1) # [Slice1 | Slice2 | Slice3]
+            
+            # If GT exists, stack GT on top of Pred for this direction
+            if gt_volume is not None and imgs_gt_row:
+                row_gt = np.concatenate(imgs_gt_row, axis=1)
+                sep_h = np.ones((5, row_pred.shape[1]), dtype=row_pred.dtype) # Thin separator
+                full_row = np.concatenate([row_gt, sep_h, row_pred], axis=0)
+            else:
+                full_row = row_pred
+            
+            all_direction_imgs.append(full_row)
+
+    # Now stack the 3 direction blocks vertically. 
+    # Note: They might have different widths if D != H != W. 
+    # We need to pad them to the max width to concatenate vertically.
+    max_width = max(img.shape[1] for img in all_direction_imgs)
     
-    if gt_volume is not None and imgs_gt:
-        row_gt = concat_row(imgs_gt)
-        
-        # [NOTE] Stack Vertically: GT on Top, Pred on Bottom
-        # Add vertical separator
-        sep_height = 10
-        width = row_pred.shape[1]
-        v_separator = np.ones((sep_height, width), dtype=row_pred.dtype)
-        
-        combined_img = np.concatenate([row_gt, v_separator, row_pred], axis=0)
-    else:
-        combined_img = row_pred
+    padded_imgs = []
+    for img in all_direction_imgs:
+        if img.shape[1] < max_width:
+            pad_width = max_width - img.shape[1]
+            # Pad right side with white (1.0)
+            padding = np.ones((img.shape[0], pad_width), dtype=img.dtype)
+            img = np.concatenate([img, padding], axis=1)
+        padded_imgs.append(img)
+
+    final_img = padded_imgs[0]
+    sep_block = np.ones((20, max_width), dtype=final_img.dtype) # Thick separator between views
+    
+    for i in range(1, len(padded_imgs)):
+        final_img = np.concatenate([final_img, sep_block, padded_imgs[i]], axis=0)
 
     model.train()
-    # Return image, list of indices, and total count
-    return combined_img, slice_indices, resolution
+    return final_img, slice_pos_norm
 
 def train_one_epoch(
     model: torch.nn.Module,
@@ -306,13 +322,13 @@ def train_one_epoch(
 
     # Visualize intermediate slice at the end of the epoch
     if args and args.wandb and misc.is_main_process():
-        # Retrieve GT volume from dataset if available
         gt_volume = None
         if hasattr(data_loader, 'dataset') and hasattr(data_loader.dataset, 'data'):
              gt_volume = data_loader.dataset.data
-        img, slice_indices, total_slices = visualize_slice(model, structure_points, device, gt_volume=gt_volume)
-        caption_str = f"Epoch {epoch} | Top: GT, Bottom: Pred | Slices: {slice_indices} / {total_slices}"
-        wandb.log({"val/slices": [wandb.Image(img, caption=caption_str)]})
+        
+        img, positions = visualize_slice(model, structure_points, device, gt_volume=gt_volume)
+        caption_str = f"Epoch {epoch} | Top: GT, Bottom: Pred | Views: Axial (Top), Coronal (Mid), Sagittal (Bot)"
+        wandb.log({"val/multi_view": [wandb.Image(img, caption=caption_str)]})
     
     # gather the stats from all processes
     metric_logger.synchronize_between_processes()

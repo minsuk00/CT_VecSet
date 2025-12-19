@@ -226,7 +226,7 @@ def point_vec1024_dim1024_depth24(pc_size=8192):
         bottleneck_args={},
     )
 
-def point_vec512x32_dim512_depth24(pc_size=2048):
+def point_vec512_dim512_depth24(pc_size=2048):
     return create_autoencoder(
         depth=24,
         dim=512, # C=512, Latent Vector의 차원
@@ -237,13 +237,35 @@ def point_vec512x32_dim512_depth24(pc_size=2048):
         bottleneck_args={},
     )
 
-def learnable_vec512x32_dim512_depth24(pc_size=2048):
+def learnable_vec512_dim512_depth24(pc_size=2048):
     return create_autoencoder(
         depth=24,
         dim=512, # C=512, Latent Vector의 차원
         M=512, # M=512 Latent Set의 개수
         N=pc_size, # N=2048
         query_type="learnable",
+        bottleneck=Bottleneck,
+        bottleneck_args={},
+    )
+    
+def point_vec1024_dim1024_depth24(pc_size=2048):
+    return create_autoencoder(
+        depth=24,
+        dim=1024, # C=512, Latent Vector의 차원
+        M=1024, # M=512 Latent Set의 개수
+        N=pc_size, # N=2048
+        query_type="point",
+        bottleneck=Bottleneck,
+        bottleneck_args={},
+    )
+    
+def custom_model(pc_size=2048):
+    return create_autoencoder(
+        depth=24,
+        dim=1024, # C=512, Latent Vector의 차원
+        M=1024, # M=512 Latent Set의 개수
+        N=pc_size, # N=2048
+        query_type="point",
         bottleneck=Bottleneck,
         bottleneck_args={},
     )

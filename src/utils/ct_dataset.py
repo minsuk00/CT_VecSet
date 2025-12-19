@@ -44,7 +44,8 @@ class CTSingleVolumeDataset(Dataset):
         # We want the encoder to look at 'interesting' parts (e.g., bones, organs),
         # not just empty black space (0).
         # Strategy: Sample indices where intensity > 0.1
-        self.structure_indices = torch.nonzero(self.data[0] > 0.05)
+        # self.structure_indices = torch.nonzero(self.data[0] > 0.05)
+        self.structure_indices = torch.nonzero(self.data[0] > 0.3)
 
         self.total_voxels = self.data.numel()
         self.num_structure = len(self.structure_indices)
