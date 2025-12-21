@@ -6,7 +6,7 @@ from torch.utils.data import Dataset
 
 
 class CTSingleVolumeDataset(Dataset):
-    def __init__(self, nii_path, pc_size=8192, query_size=4096, split="train"):
+    def __init__(self, nii_path, pc_size=8192, query_size=4096, split="train", structure_intensity_threshold=0.05):
         """
         Args:
             nii_path: Path to the single .nii.gz file
@@ -44,8 +44,9 @@ class CTSingleVolumeDataset(Dataset):
         # We want the encoder to look at 'interesting' parts (e.g., bones, organs),
         # not just empty black space (0).
         # Strategy: Sample indices where intensity > 0.1
+        self.structure_indices = torch.nonzero(self.data[0] > structure_intensity_threshold)
         # self.structure_indices = torch.nonzero(self.data[0] > 0.05)
-        self.structure_indices = torch.nonzero(self.data[0] > 0.3)
+        # self.structure_indices = torch.nonzero(self.data[0] > 0.3)
 
         self.total_voxels = self.data.numel()
         self.num_structure = len(self.structure_indices)

@@ -143,7 +143,10 @@ def main(args):
     torch.manual_seed(seed)
     np.random.seed(seed)
 
-    cudnn.benchmark = True
+    # cudnn.benchmark = True
+    cudnn.benchmark = False # NOTE: disable for speed
+    torch.use_deterministic_algorithms(True) # NOTE: disable for speed
+    os.environ["CUBLAS_WORKSPACE_CONFIG"] = ":4096:8" # NOTE: disable for speed
 
     torch.backends.cuda.matmul.allow_tf32 = True
     torch.backends.cudnn.allow_tf32 = True
@@ -151,7 +154,7 @@ def main(args):
     # dataset_train = Objaverse(split="train", sdf_sampling=True, sdf_size=1024, surface_sampling=True, surface_size=args.point_cloud_size)
     # dataset_val = Objaverse(split="val", sdf_sampling=True, sdf_size=1024, surface_sampling=True, surface_size=args.point_cloud_size)
 
-    dataset_train = CTSingleVolumeDataset(nii_path=args.data_path, pc_size=args.point_cloud_size)  # DUMMY TEST
+    dataset_train = CTSingleVolumeDataset(nii_path=args.data_path, pc_size=args.point_cloud_size, structure_intensity_threshold=args.structure_intensity_threshold)  # DUMMY TEST
     # Use same dataset for val for overfitting test
     dataset_val = dataset_train
 
@@ -214,7 +217,8 @@ def main(args):
     #     drop_last=False
     # )
 
-    model = autoencoder.__dict__[args.model](pc_size=args.point_cloud_size)
+    # model = autoencoder.__dict__[args.model](pc_size=args.point_cloud_size)
+    model = autoencoder.__dict__[args.model](pc_size=args.point_cloud_size, **vars(args))
 
     model.to(device)
 
@@ -244,7 +248,7 @@ def main(args):
     #     no_weight_decay_list=model_without_ddp.no_weight_decay(),
     #     layer_decay=args.layer_decay
     # )
-    optimizer = torch.optim.AdamW(model_without_ddp.parameters(), lr=args.lr)
+    optimizer = torch.optim.AdamW(model_without_ddp.parameters(), lr=args.lr, weight_decay=args.weight_decay)
     loss_scaler = NativeScaler()
 
     criterion = torch.nn.L1Loss()

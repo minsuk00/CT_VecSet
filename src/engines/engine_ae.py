@@ -95,6 +95,7 @@ def visualize_slice(model, pc, device, resolution=256, gt_volume=None):
                 # Predict
                 out = model(pc[:1], queries)
                 img_pred = out["o"].reshape(res_u, res_v).cpu().numpy()
+                # img_pred = torch.sigmoid(out["o"]).reshape(res_u, res_v).cpu().numpy() # NOTE: L1 -> BCE
                 img_pred = np.clip(img_pred, 0, 1)
                 imgs_pred_row.append(img_pred)
 
@@ -203,6 +204,9 @@ def train_one_epoch(
             if output.dim() == 2:
                 output = output.unsqueeze(-1)
 
+            # output_probs = torch.sigmoid(output) # NOTE: L1 -> BCE
+            # criterion = torch.nn.BCEWithLogitsLoss() # NOTE: L1 -> BCE
+            
             # grad = points_gradient(points_all, output)
             # TODO: CHANGE LOSS FOR CT
             # with torch.amp.autocast(device_type="cuda", dtype=torch.bfloat16, enabled=True):
@@ -253,7 +257,7 @@ def train_one_epoch(
             sys.exit(1)
 
         loss /= accum_iter
-        loss_scaler(loss, optimizer, clip_grad=max_norm, parameters=model.parameters(), create_graph=False, update_grad=(data_iter_step + 1) % accum_iter == 0)  # Backprop해줌
+        grad_norm = loss_scaler(loss, optimizer, clip_grad=max_norm, parameters=model.parameters(), create_graph=False, update_grad=(data_iter_step + 1) % accum_iter == 0)  # Backprop해줌
         if (data_iter_step + 1) % accum_iter == 0:
             optimizer.zero_grad()
 
@@ -263,11 +267,13 @@ def train_one_epoch(
         with torch.no_grad():
             # MSE & PSNR
             # Since data is [0, 1], PSNR = -10 * log10(MSE)
+            # mse_val = F.mse_loss(output_probs, labels).item() # best: 0.0, worst: 1.0 # NOTE: L1 -> BCE
             mse_val = F.mse_loss(output, labels).item() # best: 0.0, worst: 1.0
             psnr_val = -10.0 * math.log10(mse_val + 1e-10) # 1e-10 for numerical stability. best: 100, worst: 0
             
             # IoU with threshold 0.1 (Occupancy check)
             # Threshold 0.1: Is it structure? (>0.1) or Air? (<0.1)
+            # iou_val = calc_iou(output_probs, labels, threshold=0.1) # best: 1.0, worst: 0.0
             iou_val = calc_iou(output, labels, threshold=0.1) # best: 1.0, worst: 0.0
 
         # Update Loggers
@@ -308,7 +314,8 @@ def train_one_epoch(
                 "train/psnr": psnr_val,
                 "train/iou": iou_val,
                 "train/lr": max_lr,
-                "epoch": epoch
+                "epoch": epoch,
+                "train/grad_norm": grad_norm,
             })
         
         loss_value_reduce = misc.all_reduce_mean(loss_value)
@@ -321,7 +328,7 @@ def train_one_epoch(
             log_writer.add_scalar("lr", max_lr, epoch_1000x)
 
     # Visualize intermediate slice at the end of the epoch
-    if args and args.wandb and misc.is_main_process():
+    if args and args.wandb and misc.is_main_process() and (epoch % args.vis_iter == 0):
         gt_volume = None
         if hasattr(data_loader, 'dataset') and hasattr(data_loader.dataset, 'data'):
              gt_volume = data_loader.dataset.data

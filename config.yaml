@@ -2,35 +2,44 @@
 batch_size: 1
 epochs: 1000
 accum_iter: 1
+# accum_iter: 10
+vis_iter: 1
 
 # Optimizer Settings
-lr: 1.0e-4
+# lr: 1.0e-4
+# lr: 1.0e-5
+lr: 3.0e-4
 # lr: null  # Will be calculated based on blr
 blr: 1.0e-4
 min_lr: 1.0e-6
-weight_decay: 0.05
+# weight_decay: 0.00
+weight_decay: 0.05 # NOTE: use weight decay when scaling to multiple images
 # warmup_epochs: 40
 warmup_epochs: 10
 clip_grad: null
+# clip_grad: 1.0
 layer_decay: 0.75
 
 # Model Architecture
-model: "point_vec1024_dim1024_depth24"
+# model: "point_vec1024_dim1024_depth24"
 # model: "point_vec512_dim512_depth24"
 # model: "learnable_vec512_dim512_depth24"
 # point_cloud_size: 8192
 # point_cloud_size: 65536
 point_cloud_size: 14147
-# model: "custom_model"
-# latent_vec: 1024 # Latent Vector 개수
-# latent_dim: 1024 # Latent Vector 하나의 차원
-# query_type: "point" # point, learnable
+model: "custom_model"
+latent_vec: 1024 # Latent Vector 개수
+latent_dim: 1024 # Latent Vector 하나의 차원
+query_type: "point" # point, learnable
+model_depth: 1
+# model_depth: 3
 # model_depth: 24
 
 # Dataset Settings
 dataset_type: "ct_single" 
-# data_path: "dummy_ct.nii.gz"
-data_path: "/gpfs/accounts/jjparkcv_root/jjparkcv98/minsukc/LIDC/LIDC_NII_Data/LIDC_0000.nii.gz"
+structure_intensity_threshold: 0.05
+data_path: "dummy_ct.nii.gz"
+# data_path: "/gpfs/accounts/jjparkcv_root/jjparkcv98/minsukc/LIDC/LIDC_NII_Data/LIDC_0000.nii.gz"
 num_workers: 0 # Set to 0 for debugging/single file to avoid fork issues
 pin_mem: true
 

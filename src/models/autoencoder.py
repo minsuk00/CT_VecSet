@@ -33,7 +33,7 @@ class VecSetAutoEncoder(nn.Module):
         self.depth = depth
 
         self.num_inputs = num_inputs
-        self.num_latents = num_latents  # Latent VecSet의 Size. 각 vector는 dim 차원
+        self.num_latents = num_latents  # Latent VecSet의 Size. 각 vector는 dim 차원 
 
         self.query_type = query_type
         # PointEmbed output is 'dim'. We append intensity (1 channel), so we have dim+1.
@@ -64,7 +64,7 @@ class VecSetAutoEncoder(nn.Module):
         self.to_outputs = nn.Sequential(
             nn.LayerNorm(queries_dim),
             nn.Linear(queries_dim, output_dim),
-            nn.Sigmoid(),
+            # nn.Sigmoid(),
         )
 
         nn.init.zeros_(self.to_outputs[1].weight)
@@ -259,13 +259,15 @@ def point_vec1024_dim1024_depth24(pc_size=2048):
         bottleneck_args={},
     )
     
-def custom_model(pc_size=2048):
+def custom_model(pc_size=2048, **kwargs):
+    print(f"[DEBUG] Instantiating custom_model")
+    
     return create_autoencoder(
-        depth=24,
-        dim=1024, # C=512, Latent Vector의 차원
-        M=1024, # M=512 Latent Set의 개수
-        N=pc_size, # N=2048
-        query_type="point",
+        depth=kwargs.get('model_depth', 24), 
+        dim=kwargs.get('latent_dim', 1024),  
+        M=kwargs.get('latent_vec', 1024),    
+        N=pc_size,
+        query_type=kwargs.get('query_type', "point"), 
         bottleneck=Bottleneck,
         bottleneck_args={},
     )
