@@ -53,7 +53,7 @@ class CTSingleVolumeDataset(Dataset):
         self.structure_ratio = self.num_structure / self.total_voxels
         
         print(f"[Dataset] Total Voxels: {self.total_voxels}") # 262144 for torch.Size([1, 64, 64, 64])
-        print(f"[Dataset] Structure Voxels (>0.05): {self.num_structure}") # 14147
+        print(f"[Dataset] Structure Voxels (>{structure_intensity_threshold}): {self.num_structure}") # 14147
         print(f"[Dataset] Structure Ratio: {self.structure_ratio:.4f} ({self.structure_ratio*100:.2f}%)") # 0.0540 (5.40%)
         print(f"[Dataset] Encoding Voxels: {pc_size}") # 14147
         
@@ -67,7 +67,8 @@ class CTSingleVolumeDataset(Dataset):
     def __len__(self):
         # Infinite length for "Iterative" training on single volume,
         # or a fixed number like 1000 to define an 'epoch'
-        return 300
+        return 500
+        # return 1000
 
     def __getitem__(self, idx):
         D, H, W = self.data.shape[1:]

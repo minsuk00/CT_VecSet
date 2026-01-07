@@ -25,6 +25,8 @@ class VecSetAutoEncoder(nn.Module):
         query_type="point",
         bottleneck=None,
         bottleneck_args={},
+        use_encoder=True, # NOTE: use for debugging. ditch encoder. directly optimize latents. auto-decoding
+        point_embed_dim=96,
     ):
         super().__init__()
 
@@ -34,6 +36,7 @@ class VecSetAutoEncoder(nn.Module):
 
         self.num_inputs = num_inputs
         self.num_latents = num_latents  # Latent VecSet의 Size. 각 vector는 dim 차원 
+        self.use_encoder = use_encoder # Save flag
 
         self.query_type = query_type
         # PointEmbed output is 'dim'. We append intensity (1 channel), so we have dim+1.
@@ -50,7 +53,8 @@ class VecSetAutoEncoder(nn.Module):
         self.cross_attend_blocks = nn.ModuleList([PreNorm(dim, Attention(dim, dim, heads=dim // dim_head, dim_head=dim_head)), PreNorm(dim, FeedForward(dim))])
 
         # Fourier Feature Embedding + 합쳐진 정보를 Linear Layer에 통과시켜, 모델이 처리할 수 있는 크기(dim)로 변환하고 특징을 섞어줌
-        self.point_embed = PointEmbed(dim=dim)
+        # self.point_embed = PointEmbed(dim=dim)
+        self.point_embed = PointEmbed(dim=dim, hidden_dim=point_embed_dim)
 
         # 인코더 본체: 여러 층의 Self-Attention + MLP (FeedForward)
         self.layers = nn.ModuleList([])
@@ -61,10 +65,21 @@ class VecSetAutoEncoder(nn.Module):
         self.decoder_cross_attn = PreNorm(queries_dim, Attention(queries_dim, dim, heads=dim // dim_head, dim_head=dim_head))
 
         # Output Head. Linear Projection
+        # self.to_outputs = nn.Sequential(
+        #     nn.LayerNorm(queries_dim),
+        #     nn.Linear(queries_dim, output_dim),
+        #     nn.Sigmoid(),
+        # )
         self.to_outputs = nn.Sequential(
             nn.LayerNorm(queries_dim),
+            nn.Linear(queries_dim, queries_dim), 
+            nn.GELU(),
+            nn.Linear(queries_dim, queries_dim), 
+            nn.GELU(),
+            nn.Linear(queries_dim, queries_dim), 
+            nn.GELU(),
             nn.Linear(queries_dim, output_dim),
-            # nn.Sigmoid(),
+            nn.Sigmoid(),
         )
 
         nn.init.zeros_(self.to_outputs[1].weight)
@@ -76,6 +91,18 @@ class VecSetAutoEncoder(nn.Module):
     def encode(self, pc):
         B, N, _ = pc.shape
         assert N == self.num_inputs
+
+        # If use_encoder is False, we purely optimize the learnable latents
+        # We ignore the content of 'pc' and only use it to determine batch size B
+        if not self.use_encoder:
+            if self.query_type != "learnable":
+                 raise ValueError("To ditch the encoder, query_type must be 'learnable'.")
+            # Pure Latent Optimization: Just return the learnable latents
+            # We still pass them through the bottleneck 'pre' to maintain architecture consistency
+            x = repeat(self.latents.weight, "n d -> b n d", b=B)
+            # print(f"[DEBUG] Encode: Skipping Encoder. Using learnable latents directly. Shape: {x.shape}")
+            bottleneck = self.bottleneck.pre(x)
+            return bottleneck
 
         coords = pc[..., :3]      # (B, N, 3)
         intensities = pc[..., 3:] # (B, N, 1)
@@ -107,7 +134,8 @@ class VecSetAutoEncoder(nn.Module):
         x = self.bottleneck.post(x)
 
         if self.query_type == "learnable":
-            x = x + self.latents.weight[None]
+            if self.use_encoder:
+                x = x + self.latents.weight[None]
 
         for self_attn, self_ff in self.layers:
             x = self_attn(x) + x
@@ -141,7 +169,7 @@ class VecSetAutoEncoder(nn.Module):
         return {"o": o, **bottleneck}
 
 
-def create_autoencoder(depth=24, dim=512, M=512, N=2048, query_type="point", bottleneck=None, bottleneck_args={}):
+def create_autoencoder(depth=24, dim=512, M=512, N=2048, query_type="point", bottleneck=None, bottleneck_args={}, use_encoder=True, point_embed_dim=96):
     model = VecSetAutoEncoder(
         depth=depth,
         dim=dim,
@@ -151,6 +179,8 @@ def create_autoencoder(depth=24, dim=512, M=512, N=2048, query_type="point", bot
         query_type=query_type,
         bottleneck=bottleneck,
         bottleneck_args=bottleneck_args,
+        use_encoder=use_encoder,
+        point_embed_dim=point_embed_dim,
     )
     return model
 
@@ -270,4 +300,6 @@ def custom_model(pc_size=2048, **kwargs):
         query_type=kwargs.get('query_type', "point"), 
         bottleneck=Bottleneck,
         bottleneck_args={},
+        use_encoder=kwargs.get('use_encoder', True),
+        point_embed_dim=kwargs.get('point_embed_dim', 96),
     )

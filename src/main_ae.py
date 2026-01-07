@@ -154,7 +154,7 @@ def main(args):
     # dataset_train = Objaverse(split="train", sdf_sampling=True, sdf_size=1024, surface_sampling=True, surface_size=args.point_cloud_size)
     # dataset_val = Objaverse(split="val", sdf_sampling=True, sdf_size=1024, surface_sampling=True, surface_size=args.point_cloud_size)
 
-    dataset_train = CTSingleVolumeDataset(nii_path=args.data_path, pc_size=args.point_cloud_size, structure_intensity_threshold=args.structure_intensity_threshold)  # DUMMY TEST
+    dataset_train = CTSingleVolumeDataset(nii_path=args.data_path, pc_size=args.point_cloud_size, structure_intensity_threshold=args.structure_intensity_threshold, query_size = args.query_size)  # DUMMY TEST
     # Use same dataset for val for overfitting test
     dataset_val = dataset_train
 
@@ -240,7 +240,8 @@ def main(args):
     print("effective batch size: %d" % eff_batch_size)
 
     if args.distributed:
-        model = torch.nn.parallel.DistributedDataParallel(model, device_ids=[args.gpu], find_unused_parameters=False)
+        # model = torch.nn.parallel.DistributedDataParallel(model, device_ids=[args.gpu], find_unused_parameters=False)
+        model = torch.nn.parallel.DistributedDataParallel(model, device_ids=[args.gpu], find_unused_parameters=True)
         model_without_ddp = model.module
 
     # # build optimizer with layer-wise lr decay (lrd)
